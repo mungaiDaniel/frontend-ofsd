@@ -13,6 +13,12 @@ export const investmentService = {
     return res.data;
   },
 
+  async getInvestorOverview(clientCode: string): Promise<ApiResponse> {
+    const code = encodeURIComponent(clientCode);
+    const res = await api.get<ApiResponse>(`/investors/${code}/overview`);
+    return res.data;
+  },
+
   async getInvestorPortfolio(clientCode: string): Promise<ApiResponse> {
     const code = encodeURIComponent(clientCode);
     const res = await api.get<ApiResponse>(`/investors/${code}/portfolio`);

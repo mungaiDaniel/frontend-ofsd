@@ -1,280 +1,1072 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useForm } from "react-hook-form";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { createValuationSchema, type CreateValuationFormData } from "@/lib/validators/valuation.schema";
-import { valuationService } from "@/services/valuationService";
-import { formatCurrency } from "@/lib/utils";
-import { ROUTES } from "@/lib/constants";
-import type { CoreFund } from "@/lib/types";
+import { motion } from "motion/react";
 import { toast } from "sonner";
-import { ArrowLeft, Eye } from "lucide-react";
+import { fundSummaryService } from "@/services/fundSummaryService";
+import { fundService } from "@/services/fundService";
+import { valuationService } from "@/services/valuationService";
+import { formatNav, formatDate } from "@/lib/utils";
+import { ROUTES } from "@/lib/constants";
+import type {
+  FundSummaryFund,
+  ValuationResponse,
+} from "@/lib/types";
+
+// ── Style helpers ──
+
+const FIELD_INPUT: React.CSSProperties = {
+  width: "100%",
+  padding: "9px 12px",
+  borderRadius: "8px",
+  background: "rgba(0,0,0,0.25)",
+  border: "1px solid rgba(255,255,255,0.1)",
+  color: "#FFFFFF",
+  fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
+  fontSize: "13px",
+  outline: "none",
+  transition: "all 0.15s",
+  letterSpacing: "-0.01em",
+};
+
+function focusIn(e: React.FocusEvent<HTMLInputElement>) {
+  e.target.style.borderColor = "#3B82F6";
+  e.target.style.boxShadow = "0 0 0 3px rgba(59,130,246,0.15)";
+  e.target.style.background = "rgba(0,0,0,0.35)";
+}
+function focusOut(e: React.FocusEvent<HTMLInputElement>) {
+  e.target.style.borderColor = "rgba(255,255,255,0.1)";
+  e.target.style.boxShadow = "none";
+  e.target.style.background = "rgba(0,0,0,0.25)";
+}
+
+function CurrencyBadge({ currency }: { currency: "KES" | "USD" }) {
+  const isKes = currency === "KES";
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        padding: "2px 8px",
+        borderRadius: "6px",
+        fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
+        fontSize: "10px",
+        fontWeight: 600,
+        letterSpacing: "0.04em",
+        background: isKes ? "var(--color-kes-bg)" : "var(--color-usd-bg)",
+        color: isKes ? "var(--color-kes)" : "var(--color-usd)",
+        border: isKes ? "1px solid var(--color-kes-border)" : "1px solid var(--color-usd-border)",
+      }}
+    >
+      {currency}
+    </span>
+  );
+}
+
+function ReconBadge({ status, diff }: { status: "PASS" | "FAIL"; diff: number }) {
+  const pass = status === "PASS";
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "5px",
+        padding: "3px 10px",
+        borderRadius: "100px",
+        fontSize: "10px",
+        fontWeight: 600,
+        letterSpacing: "0.02em",
+        background: pass ? "rgba(16,185,129,0.12)" : "rgba(239,68,68,0.12)",
+        color: pass ? "#10B981" : "#EF4444",
+        border: pass ? "1px solid rgba(16,185,129,0.3)" : "1px solid rgba(239,68,68,0.3)",
+      }}
+    >
+      <span
+        style={{
+          width: "5px",
+          height: "5px",
+          borderRadius: "50%",
+          background: pass ? "#10B981" : "#EF4444",
+        }}
+      />
+      {pass ? "PASS" : "FAIL"} {!pass && `Δ ${diff.toFixed(2)}`}
+    </span>
+  );
+}
+
+// Per-class input row
+interface ClassRow {
+  classId: number;
+  classCode: string;
+  className: string;
+  currency: "KES" | "USD";
+  prevNav: number | null;
+  navPerShare: string;
+  totalFundNav: string;
+}
+
+function buildRows(funds: FundSummaryFund[]): ClassRow[] {
+  const rows: ClassRow[] = [];
+  for (const fund of funds) {
+    for (const cls of fund.classes) {
+      if (!cls.is_active) continue;
+      rows.push({
+        classId: cls.id,
+        classCode: cls.class_code,
+        className: cls.class_name,
+        currency: cls.currency,
+        prevNav: cls.current_nav,
+        navPerShare: cls.current_nav != null ? String(cls.current_nav) : "",
+        totalFundNav: cls.total_nav != null ? String(cls.total_nav) : "",
+      });
+    }
+  }
+  return rows;
+}
+
+// ── Main page ──
+
+type Step = "entry" | "preview" | "success";
 
 export default function ValuationCreatePage() {
   const navigate = useNavigate();
-  const [funds, setFunds] = useState<CoreFund[]>([]);
-  const [dryRunResult, setDryRunResult] = useState<any>(null);
-  const [dryRunning, setDryRunning] = useState(false);
+
+  const [_funds, setFunds] = useState<FundSummaryFund[]>([]);
+  const [fundsLoading, setFundsLoading] = useState(true);
+  const [rows, setRows] = useState<ClassRow[]>([]);
+  const [valuationDate, setValuationDate] = useState(
+    new Date().toISOString().slice(0, 10)
+  );
+  const [step, setStep] = useState<Step>("entry");
+  const [previewing, setPreviewing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [previewResult, setPreviewResult] = useState<ValuationResponse | null>(null);
+  const [successResult, setSuccessResult] = useState<ValuationResponse | null>(null);
 
   useEffect(() => {
-    valuationService.getActiveFunds().then(setFunds).catch(() => {});
+    (async () => {
+      setFundsLoading(true);
+      try {
+        const summary = await fundSummaryService.getSummary();
+        if (summary?.funds?.length) {
+          setFunds(summary.funds);
+          setRows(buildRows(summary.funds));
+        } else {
+          const basic = await fundService.getAll();
+          const withClasses = await Promise.all(
+            basic.map(async (f) => {
+              const classes = await fundService.getClasses(f.id).catch(() => []);
+              return {
+                id: f.id,
+                fund_name: f.fund_name,
+                fund_code: f.fund_code ?? "",
+                is_active: f.is_active,
+                classes: classes.map((c) => ({
+                  ...c,
+                  total_shares: null,
+                  prev_nav: null,
+                  current_nav: null,
+                  total_nav: null,
+                  performance_pct: null,
+                  valuation_date: null,
+                })),
+                totals_by_currency: {},
+                weighted_performance_pct: null,
+              } as FundSummaryFund;
+            })
+          );
+          setFunds(withClasses);
+          setRows(buildRows(withClasses));
+        }
+      } catch {
+        toast.error("Failed to load funds");
+        setFunds([]);
+      } finally {
+        setFundsLoading(false);
+      }
+    })();
   }, []);
 
-  const { register, handleSubmit, getValues, formState: { errors, isSubmitting } } = useForm<CreateValuationFormData>({
-    resolver: zodResolver(createValuationSchema),
+  const updateRow = (classId: number, field: "navPerShare" | "totalFundNav", value: string) => {
+    setRows((prev) =>
+      prev.map((r) => (r.classId === classId ? { ...r, [field]: value } : r))
+    );
+  };
+
+  const canPreview =
+    rows.length > 0 &&
+    rows.every((r) => r.navPerShare.trim() && parseFloat(r.navPerShare) > 0) &&
+    rows.every((r) => r.totalFundNav.trim() && parseFloat(r.totalFundNav) > 0) &&
+    valuationDate;
+
+  const buildPayload = () => ({
+    valuation_date: valuationDate,
+    classes: rows.map((r) => ({
+      share_class_id: r.classId,
+      nav_per_share: parseFloat(r.navPerShare),
+      total_fund_nav: parseFloat(r.totalFundNav),
+    })),
   });
 
-  const declaredTotal = Number(dryRunResult?.head_office_total || 0);
-  const excelTotal = typeof dryRunResult?.excel_total === "number" ? dryRunResult.excel_total : (typeof dryRunResult?.total_open_capital === "number" ? dryRunResult.total_open_capital : null);
-  const withdrawalsTotal = typeof dryRunResult?.withdrawals_total === "number" ? dryRunResult.withdrawals_total : Number(dryRunResult?.withdrawals_applied || 0);
-  // ✅ FIX: Use gross_principal (=net_excel_total) which now includes compound growth from previous epoch
-  const netExcelTotal = typeof dryRunResult?.net_excel_total === "number" ? dryRunResult.net_excel_total : (typeof dryRunResult?.gross_principal === "number" ? dryRunResult.gross_principal : null);
-
-  const totalStartBalance = Number(dryRunResult?.total_start_balance ?? 0);
-  const calculatedProfit = Number(dryRunResult?.total_profit ?? dryRunResult?.performance_applied ?? 0);
-  const totalToCommit = Number(dryRunResult?.expected_closing_aum ?? dryRunResult?.reconciliation_total ?? dryRunResult?.projected_portfolio_value ?? 0);
-
-  const performanceRate = Number(getValues().performance_rate ?? dryRunResult?.performance_rate ?? 0);
-
-  // Source values are from backend dry-run. Fallback to backend-provided totals where available.
-  // ✅ basePrincipal should be total_active_capital_for_profit (already includes previous epoch + new deposits)
-  const basePrincipal = excelTotal !== null ? excelTotal : totalStartBalance;
-  const performanceApplied = calculatedProfit;
-  const projectedValuation = totalToCommit > 0 ? totalToCommit : Number((basePrincipal + performanceApplied).toFixed(2));
-  const netPrincipal = netExcelTotal !== null ? netExcelTotal : Number((basePrincipal - withdrawalsTotal).toFixed(2));
-
-  const expectedTotal = declaredTotal;
-  const calculatedTotal = Number(dryRunResult?.reconciliation_total ?? totalToCommit ?? projectedValuation);
-  const reconciliationDiff = Number((calculatedTotal - expectedTotal).toFixed(2));
-  const reconciliationStatus = Math.abs(reconciliationDiff) <= 0.01;
-
-  const grossPrincipal = Number(dryRunResult?.gross_principal ?? netPrincipal ?? basePrincipal);
-  const totalRowsDetected = Number(dryRunResult?.total_rows_detected ?? dryRunResult?.investors_processed ?? 0);
-  const expectedBatchTotal = expectedTotal;
-
-  const statusBoxStyles = reconciliationStatus
-    ? { background: "rgba(0, 0, 91, 0.08)", border: "1px solid #00005b", borderRadius: "8px" }
-    : { background: "rgba(220, 38, 38, 0.08)", border: "1px solid rgba(220, 38, 38, 0.4)", borderRadius: "8px" };
-
-
-  const onSubmit = async (data: CreateValuationFormData) => {
-    if (!reconciliationStatus) {
-      toast.error("Cannot commit: reconciliation mismatch must be resolved before saving.");
-      return;
-    }
-
-    const selectedFund = funds.find((f) => f.id === Number(data.fund_id));
-    const payload = {
-      fund_id: Number(data.fund_id),
-      fund_name: selectedFund?.fund_name || undefined,
-      start_date: data.start_date,
-      end_date: data.end_date,
-      performance_rate_percent: Number(data.performance_rate),
-      head_office_total: Number(data.head_office_total),
-    };
-
+  const handlePreview = async () => {
+    if (!canPreview) return;
+    setPreviewing(true);
     try {
-      await valuationService.confirm(payload);
-      toast.success("Valuation committed successfully");
-      // Trigger a dashboard refetch without manual refresh.
-      window.dispatchEvent(new Event("dashboard_stats_dirty"));
-      navigate(ROUTES.VALUATIONS);
+      const result = await valuationService.preview(buildPayload());
+      setPreviewResult(result);
+      setStep("preview");
     } catch (err: any) {
-      toast.error(err.response?.data?.message || "Failed to commit valuation");
-    }
-  };
-
-  const onDryRun = async () => {
-    const vals = getValues();
-    if (!vals.fund_id || !vals.start_date || !vals.end_date || vals.performance_rate == null || vals.head_office_total == null) {
-      toast.error("Fill all fields before previewing");
-      return;
-    }
-    setDryRunning(true);
-    try {
-      const res = await valuationService.dryRun(vals);
-      setDryRunResult((res as any).data || res);
-      toast.success("Dry run complete");
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || "Dry run failed");
+      toast.error(err?.response?.data?.message ?? "Preview failed — check your values and try again.");
     } finally {
-      setDryRunning(false);
+      setPreviewing(false);
     }
   };
 
-  const inputStyle = { background: "var(--color-bg-input)", borderColor: "var(--color-border-default)", color: "var(--color-text-primary)" };
+  const handleConfirm = async () => {
+    if (!previewResult) return;
+    const allPass = previewResult.classes.every((c) => c.status === "PASS");
+    if (!allPass) {
+      toast.error("Cannot commit: one or more classes failed reconciliation.");
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const result = await valuationService.submitNav(buildPayload());
+      setSuccessResult(result);
+      setStep("success");
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message ?? "Commit failed. Please try again.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
-  return (
-    <div className="container-fluid px-0">
-      <button onClick={() => navigate(ROUTES.VALUATIONS)} className="d-flex align-items-center gap-1 mb-3 btn btn-link p-0 text-decoration-none" style={{ fontSize: "12px", color: "var(--color-text-tertiary)" }}><ArrowLeft size={14} /> Back to valuations</button>
-      <div className="mb-4">
-        <h1 className="fw-bold mb-1" style={{ fontSize: "22px", color: "var(--color-text-primary)" }}>New valuation</h1>
-        <p className="mb-0" style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>Create an epoch valuation for a core fund</p>
+  // ── Success state ──
+  if (step === "success" && successResult) {
+    return (
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          padding: "24px 32px 48px",
+          maxWidth: "800px",
+          margin: "0 auto",
+          fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+          color: "#FFFFFF",
+        }}
+      >
+        <motion.div
+          initial={{ opacity: 0, y: 24 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
+          style={{ textAlign: "center" }}
+        >
+          <div
+            style={{
+              width: "64px",
+              height: "64px",
+              borderRadius: "50%",
+              background: "rgba(16,185,129,0.12)",
+              border: "1px solid rgba(16,185,129,0.35)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              margin: "0 auto 20px",
+              boxShadow: "0 0 30px rgba(16,185,129,0.15)",
+            }}
+          >
+            <svg width="28" height="28" viewBox="0 0 32 32" fill="none">
+              <path d="M9 16l5 5 9-10" stroke="#10B981" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+
+          <div style={{ fontSize: "22px", fontWeight: 700, letterSpacing: "-0.02em", marginBottom: "8px" }}>
+            Valuation committed
+          </div>
+          <div style={{ fontSize: "13px", color: "#94A3B8", marginBottom: "8px" }}>
+            NAV as of{" "}
+            <strong style={{ color: "#FFFFFF" }}>{formatDate(successResult.valuation_date)}</strong>
+          </div>
+          <div style={{ fontSize: "12px", color: "#475569", marginBottom: "28px" }}>
+            Snapshots saved for all investors. Monthly statements can now be generated.
+          </div>
+
+          {/* Class results */}
+          <div
+            style={{
+              background: "rgba(16,24,45,0.72)",
+              border: "1px solid rgba(255,255,255,0.07)",
+              borderRadius: "12px",
+              overflow: "hidden",
+              marginBottom: "24px",
+              textAlign: "left",
+            }}
+          >
+            {successResult.classes.map((cls, i) => {
+              const row = rows.find((r) => r.classCode === cls.class_code);
+              const isKes = row?.currency === "KES";
+              return (
+                <div
+                  key={cls.class_code}
+                  style={{
+                    padding: "14px 18px",
+                    borderBottom: i < successResult.classes.length - 1 ? "1px solid rgba(255,255,255,0.07)" : "none",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: "14px",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)", fontSize: "12px", color: isKes ? "var(--color-kes)" : "var(--color-usd)", fontWeight: 600 }}>
+                      {cls.class_code}
+                    </div>
+                    <div style={{ fontSize: "11px", color: "#475569", marginTop: "2px" }}>
+                      {cls.investors.length} investor{cls.investors.length !== 1 ? "s" : ""} updated
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)", fontSize: "12px", color: "#FFFFFF" }}>
+                      NAV {formatNav(cls.nav_per_share)}
+                    </div>
+                    <ReconBadge status={cls.status} diff={cls.difference} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div style={{ display: "flex", gap: "10px", justifyContent: "center" }}>
+            <button
+              onClick={() => navigate(ROUTES.REPORTS)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "7px",
+                padding: "9px 16px",
+                borderRadius: "8px",
+                background: "transparent",
+                border: "1px solid rgba(255,255,255,0.1)",
+                color: "#94A3B8",
+                fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+                fontSize: "12px",
+                fontWeight: 500,
+                cursor: "pointer",
+              }}
+            >
+              View reports
+            </button>
+            <button
+              onClick={() => navigate(ROUTES.VALUATION_CREATE)}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "7px",
+                padding: "9px 16px",
+                borderRadius: "8px",
+                background: "#1A45FF",
+                color: "#fff",
+                border: "none",
+                fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+                fontSize: "12px",
+                fontWeight: 500,
+                cursor: "pointer",
+                boxShadow: "0 0 16px rgba(26,69,255,0.3)",
+              }}
+            >
+              New valuation
+            </button>
+          </div>
+        </motion.div>
       </div>
+    );
+  }
 
-      <div className="row g-4">
-        {/* Form */}
-        <div className="col-lg-6">
-          <div className="card shadow h-100">
-            <div className="card-body p-3 p-md-4">
-              <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-            <div>
-              <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-text-secondary)" }}>Fund *</label>
-              <select {...register("fund_id", { valueAsNumber: true })} className="form-control py-3 border-secondary" style={{ ...inputStyle, borderColor: errors.fund_id ? "var(--color-destructive)" : inputStyle.borderColor }}>
-                <option value="">Select fund</option>
-                {funds.map((f) => <option key={f.id} value={f.id}>{f.fund_name}</option>)}
-              </select>
-              {errors.fund_id && <p className="text-xs mt-1" style={{ color: "var(--color-destructive)" }}>{errors.fund_id.message}</p>}
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-text-secondary)" }}>Valuation Period Start Date *</label>
-                <input type="date" {...register("start_date")} className="form-control py-3 border-secondary" style={{ ...inputStyle, borderColor: errors.start_date ? "var(--color-destructive)" : inputStyle.borderColor }} />
-                {errors.start_date && <p className="text-xs mt-1" style={{ color: "var(--color-destructive)" }}>{errors.start_date.message}</p>}
-              </div>
-              <div>
-                <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-text-secondary)" }}>Valuation Period End Date *</label>
-                <input type="date" {...register("end_date")} className="form-control py-3 border-secondary" style={{ ...inputStyle, borderColor: errors.end_date ? "var(--color-destructive)" : inputStyle.borderColor }} />
-                {errors.end_date && <p className="text-xs mt-1" style={{ color: "var(--color-destructive)" }}>{errors.end_date.message}</p>}
-              </div>
-            </div>
-            {/* Deployment reference section hidden */}
-            <div>
-              <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-text-secondary)" }}>Performance rate (%) *</label>
-              <div className="position-relative">
-                <input 
-                  type="number" 
-                  step="any" 
-                  {...register("performance_rate", { valueAsNumber: true })} 
-                  className="form-control py-3 border-secondary" 
-                  style={{ ...inputStyle, borderColor: errors.performance_rate ? "var(--color-destructive)" : inputStyle.borderColor }} 
-                  placeholder="e.g., 3.48 or -0.25"
-                />
-              </div>
-              <p className="text-[11px] mt-1" style={{ color: "var(--color-text-tertiary)" }}>Enter as percentage: 2 = 2%, -0.25 = -0.25%</p>
-              {errors.performance_rate && <p className="text-xs mt-1" style={{ color: "var(--color-destructive)" }}>{errors.performance_rate.message}</p>}
-            </div>
-            <div>
-              <label className="block text-xs font-medium mb-1.5" style={{ color: "var(--color-text-secondary)" }}>Head office total ($) *</label>
-              <input type="number" step="0.01" {...register("head_office_total", { valueAsNumber: true })} className="form-control py-3 border-secondary" style={{ ...inputStyle, borderColor: errors.head_office_total ? "var(--color-destructive)" : inputStyle.borderColor }} placeholder="12345678.90" />
-              {errors.head_office_total && <p className="text-xs mt-1" style={{ color: "var(--color-destructive)" }}>{errors.head_office_total.message}</p>}
-            </div>
-            <div className="d-flex gap-3 pt-3">
-              <button type="button" onClick={onDryRun} disabled={dryRunning} className="btn w-50 d-flex align-items-center justify-content-center gap-2 px-3 py-2 fw-bold" style={{ fontSize: "13px", border: "1px solid rgba(255,255,255,0.15)", color: "var(--color-text-secondary)", background: "transparent" }}>
-                <Eye size={14} /> {dryRunning ? "Running..." : "Dry run"}
-              </button>
-              <button type="submit" disabled={isSubmitting || !reconciliationStatus} className="btn btn-primary w-50 px-3 py-2 fw-bold" style={{ fontSize: "13px" }}>
-                {isSubmitting ? "Committing..." : "Commit valuation"}
-              </button>
-            </div>
-          </form>
-            </div>
+  // ── Preview state ──
+  if (step === "preview" && previewResult) {
+    const allPass = previewResult.classes.every((c) => c.status === "PASS");
+
+    return (
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          padding: "24px 32px 48px",
+          maxWidth: "900px",
+          margin: "0 auto",
+          fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+          color: "#FFFFFF",
+        }}
+      >
+        {/* Header */}
+        <div style={{ marginBottom: "22px" }}>
+          <button
+            onClick={() => setStep("entry")}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "6px",
+              background: "transparent",
+              border: "none",
+              color: "#94A3B8",
+              fontSize: "11px",
+              cursor: "pointer",
+              padding: "0 0 12px",
+              fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+            }}
+          >
+            <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+              <path d="M11 7H3M6 4L3 7l3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+            Back to edit
+          </button>
+          <h1
+            style={{
+              fontSize: "22px",
+              fontWeight: 700,
+              color: "#FFFFFF",
+              letterSpacing: "-0.02em",
+              margin: 0,
+              marginBottom: "4px",
+            }}
+          >
+            Valuation Preview
+          </h1>
+          <div style={{ fontSize: "12px", color: "#94A3B8" }}>
+            NAV as of <strong style={{ color: "#FFFFFF" }}>{formatDate(previewResult.valuation_date)}</strong>
+            {" · "}Review reconciliation before committing.
           </div>
         </div>
 
-        {/* Dry run preview */}
-        <div className="col-lg-6">
-          <div className="card shadow h-100">
-            <div className="card-body p-3 p-md-4">
-              <h3 className="fw-bold mb-4" style={{ fontSize: "18px", color: "var(--color-text-primary)" }}>Preview</h3>
-          {dryRunResult ? (
-            <div className="space-y-3">
-              <div className="border rounded p-3" style={{ background: "var(--color-bg-muted)" }}>
-                <h5 className="mb-2" style={{ fontSize: "14px", fontWeight: 700, color: "var(--color-text-primary)" }}>Calculation Summary</h5>
-                <div className="d-flex justify-content-between text-[13px] mb-1"><span>Total rows detected</span><span style={{ fontFamily: "var(--font-mono)" }}>{totalRowsDetected}</span></div>
-                <div className="d-flex justify-content-between text-[13px] mb-1"><span>Gross Principal (Net active capital)</span><span style={{ fontFamily: "var(--font-mono)" }}>{formatCurrency(grossPrincipal)}</span></div>
+        {/* Reconciliation warning if any fail */}
+        {!allPass && (
+          <div
+            style={{
+              padding: "12px 16px",
+              background: "rgba(239,68,68,0.08)",
+              border: "1px solid rgba(239,68,68,0.3)",
+              borderRadius: "10px",
+              display: "flex",
+              gap: "10px",
+              alignItems: "flex-start",
+              marginBottom: "18px",
+              fontSize: "12px",
+              color: "#FCA5A5",
+              lineHeight: 1.55,
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style={{ color: "#EF4444", flexShrink: 0, marginTop: "1px" }}>
+              <path d="M7 1L1 12h12L7 1z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+              <line x1="7" y1="5.5" x2="7" y2="8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+              <circle cx="7" cy="10" r="0.6" fill="currentColor" />
+            </svg>
+            <span>
+              <strong style={{ color: "#EF4444" }}>Reconciliation failed.</strong> One or more classes have a difference greater than 1.00 currency unit. Review the values and re-enter the correct NAV.
+            </span>
+          </div>
+        )}
 
-                {/* Withdrawals — red + parenthetical when non-zero */}
-                <div className="d-flex justify-content-between text-[13px] mb-1">
-                  <span style={{ color: withdrawalsTotal > 0 ? "#dc2626" : "inherit" }}>Total Withdrawals</span>
-                  <span style={{ fontFamily: "var(--font-mono)", color: withdrawalsTotal > 0 ? "#dc2626" : "inherit", fontWeight: withdrawalsTotal > 0 ? 600 : 400 }}>
-                    {withdrawalsTotal > 0 ? `(${formatCurrency(withdrawalsTotal)})` : formatCurrency(withdrawalsTotal)}
-                  </span>
-                </div>
+        {/* Per-class results */}
+        {previewResult.classes.map((cls, i) => {
+          const row = rows.find((r) => r.classCode === cls.class_code);
+          const isKes = row?.currency === "KES";
+          const pass = cls.status === "PASS";
 
-                {withdrawalsTotal > 0 && (
-                  <div className="d-flex justify-content-between text-[13px] mb-1" style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "4px" }}>
-                    <span style={{ fontWeight: 600 }}>Net Principal (Base for Interest)</span>
-                    <span style={{ fontFamily: "var(--font-mono)", fontWeight: 600 }}>{formatCurrency(netPrincipal)}</span>
+          return (
+            <motion.div
+              key={cls.class_code}
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.1, duration: 0.35, ease: [0.22, 1, 0.36, 1] }}
+              style={{
+                background: "rgba(16,24,45,0.72)",
+                WebkitBackdropFilter: "blur(20px) saturate(150%)",
+                backdropFilter: "blur(20px) saturate(150%)",
+                border: `1px solid ${pass ? "rgba(255,255,255,0.07)" : "rgba(239,68,68,0.2)"}`,
+                borderRadius: "12px",
+                overflow: "hidden",
+                marginBottom: "14px",
+              }}
+            >
+              {/* Class header */}
+              <div
+                style={{
+                  padding: "14px 18px",
+                  borderBottom: "1px solid rgba(255,255,255,0.07)",
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  gap: "14px",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+                  <CurrencyBadge currency={row?.currency ?? (isKes ? "KES" : "USD")} />
+                  <div>
+                    <div style={{ fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)", fontSize: "13px", fontWeight: 600, color: "#FFFFFF" }}>
+                      {cls.class_code}
+                    </div>
+                    <div style={{ fontSize: "11px", color: "#475569" }}>{row?.className ?? ""}</div>
                   </div>
-                )}
-
-                <div className="d-flex justify-content-between text-[13px] mb-1"><span>Performance Applied ({performanceRate.toFixed(2)}%)</span><span style={{ fontFamily: "var(--font-mono)" }}>{formatCurrency(performanceApplied)}</span></div>
-                <div className="d-flex justify-content-between text-[13px] mb-1"><span>Projected Valuation (Net + Gain)</span><span style={{ fontFamily: "var(--font-mono)" }}>{formatCurrency(projectedValuation)}</span></div>
-                <div className="d-flex justify-content-between text-[13px] mb-1"><span>Expected Batch Total</span><span style={{ fontFamily: "var(--font-mono)" }}>{formatCurrency(expectedBatchTotal)}</span></div>
-                <div className="d-flex justify-content-between text-[13px] mt-1 pt-1" style={{ borderTop: "1px solid rgba(255,255,255,0.08)" }}>
-                  <span>Distinct investors (email-distinct)</span>
-                  <span style={{ fontFamily: "var(--font-mono)" }}>{dryRunResult.distinct_investor_count ?? dryRunResult.investor_rows ?? 0}</span>
                 </div>
+                <ReconBadge status={cls.status} diff={cls.difference} />
               </div>
 
-              <div className="p-3" style={statusBoxStyles}>
-                <div className="d-flex justify-content-between align-items-center mb-1">
-                  <span style={{ fontWeight: 700 }}>Reconciliation Status</span>
-                  <span style={{ fontWeight: 700, color: reconciliationStatus ? "#166534" : "#991b1b" }}>
-                    {reconciliationStatus
-                      ? "Balanced"
-                      : `Mismatch: expected ${formatCurrency(expectedTotal)} but calculated ${formatCurrency(calculatedTotal)}`}
-                  </span>
-                </div>
-                <div className="text-[12px]" style={{ color: reconciliationStatus ? "#166534" : "#991b1b" }}>
-                  {reconciliationStatus ? "Ready to commit" : `Difference: ${formatCurrency(reconciliationDiff)}`}
-                </div>
+              {/* Reconciliation numbers */}
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, 1fr)",
+                  gap: "1px",
+                  background: "rgba(255,255,255,0.04)",
+                  borderBottom: "1px solid rgba(255,255,255,0.07)",
+                }}
+              >
+                {[
+                  { label: "NAV / Share", value: formatNav(cls.nav_per_share) },
+                  { label: "System Total", value: cls.system_total_nav.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) },
+                  {
+                    label: "AXYS Total",
+                    value: cls.head_office_nav.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+                  },
+                ].map(({ label, value }) => (
+                  <div
+                    key={label}
+                    style={{ padding: "12px 18px", background: "rgba(16,24,45,0.72)" }}
+                  >
+                    <div style={{ fontSize: "9px", fontWeight: 600, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: "5px" }}>
+                      {label}
+                    </div>
+                    <div style={{ fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)", fontSize: "13px", fontWeight: 600, color: "#FFFFFF", letterSpacing: "-0.01em" }}>
+                      {value}
+                    </div>
+                  </div>
+                ))}
               </div>
 
-              {dryRunResult.investor_breakdown && dryRunResult.investor_breakdown.length > 0 && (
-                <div className="border rounded p-3" style={{ background: "var(--color-bg-muted)" }}>
-                  <h5 className="mb-2" style={{ fontSize: "14px", fontWeight: 700, color: "var(--color-text-primary)" }}>Investor Detail Table</h5>
-                  <div className="table-responsive" style={{ maxHeight: 240, overflowY: "auto" }}>
-                    <table className="table table-sm mb-0 text-white" style={{ color: "var(--color-text-primary)" }}>
-                      <thead>
-                        <tr>
-                          <th>Investor</th>
-                          <th className="text-end">Days Active</th>
-                          <th className="text-end">Net Base</th>
-                          {withdrawalsTotal > 0 && <th className="text-end" style={{ color: "#dc2626" }}>Withdrawal</th>}
-                          <th className="text-end">{performanceRate.toFixed(2)}% Gain</th>
-                          <th className="text-end">New Total</th>
+              {/* Difference row */}
+              <div style={{ padding: "10px 18px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: "11px", color: "#475569" }}>Difference</span>
+                <span
+                  style={{
+                    fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    color: pass ? "#10B981" : "#EF4444",
+                  }}
+                >
+                  {cls.difference >= 0 ? "+" : ""}
+                  {cls.difference.toFixed(4)} {pass ? "✓ within tolerance" : "✗ exceeds 1.00"}
+                </span>
+              </div>
+
+              {/* Investor preview */}
+              {cls.investors.length > 0 && (
+                <div style={{ borderTop: "1px solid rgba(255,255,255,0.07)" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "11px" }}>
+                    <thead>
+                      <tr style={{ background: "rgba(255,255,255,0.02)" }}>
+                        {["Client Code", "Shares", "Market Value", "Performance"].map((h, j) => (
+                          <th
+                            key={h}
+                            style={{
+                              padding: "8px 18px",
+                              textAlign: j === 0 ? "left" : "right",
+                              fontSize: "9px",
+                              fontWeight: 600,
+                              color: "#475569",
+                              textTransform: "uppercase",
+                              letterSpacing: "0.06em",
+                              borderBottom: "1px solid rgba(255,255,255,0.07)",
+                            }}
+                          >
+                            {h}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {cls.investors.slice(0, 5).map((inv) => (
+                        <tr key={inv.client_code} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                          <td style={{ padding: "8px 18px", fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)", color: "#94A3B8", fontSize: "11px" }}>
+                            {inv.client_code}
+                          </td>
+                          <td style={{ padding: "8px 18px", textAlign: "right", fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)", color: "#FFFFFF", fontSize: "11px" }}>
+                            {inv.shares.toFixed(4)}
+                          </td>
+                          <td style={{ padding: "8px 18px", textAlign: "right", fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)", color: isKes ? "var(--color-kes)" : "var(--color-usd)", fontSize: "11px" }}>
+                            {inv.market_value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                          <td style={{ padding: "8px 18px", textAlign: "right", fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)", color: inv.performance_pct >= 0 ? "#10B981" : "#EF4444", fontWeight: 600, fontSize: "11px" }}>
+                            {inv.performance_pct >= 0 ? "+" : ""}{inv.performance_pct.toFixed(2)}%
+                          </td>
                         </tr>
-                      </thead>
-                      <tbody>
-                        {dryRunResult.investor_breakdown.map((investor: any) => {
-                          const rowWithdrawal = Number(investor.withdrawals_during_period ?? 0);
-                          // Use the backend-provided active capital so compound carry balances are preserved.
-                          const rowNetBase = Number((investor.active_capital ?? (investor.principal_before_start + investor.deposits_during_period)).toFixed(2));
-                          // Profit is calculated on net base, matching backend logic
-                          const rowGain = Number(investor.profit ?? (rowNetBase * (performanceRate / 100)).toFixed(2));
-                          const rowTotal = Number((rowNetBase + rowGain).toFixed(2));
-                          return (
-                            <tr key={investor.internal_client_code}>
-                              <td style={{ fontFamily: "var(--font-mono)" }}>{investor.internal_client_code}</td>
-                              <td className="text-end">
-                                {typeof investor.active_ratio_pct === "number"
-                                  ? `${investor.active_ratio_pct.toFixed(2)}% (${investor.days_active ?? 0}/${investor.period_days ?? 0})`
-                                  : "—"}
-                              </td>
-                              <td className="text-end">{formatCurrency(rowNetBase)}</td>
-                              {withdrawalsTotal > 0 && (
-                                <td className="text-end" style={{ color: "#dc2626", fontWeight: 600 }}>
-                                  {rowWithdrawal > 0 ? `(${formatCurrency(rowWithdrawal)})` : "—"}
-                                </td>
-                              )}
-                              <td className="text-end">{formatCurrency(rowGain)}</td>
-                              <td className="text-end">{formatCurrency(rowTotal)}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                      ))}
+                      {cls.investors.length > 5 && (
+                        <tr>
+                          <td colSpan={4} style={{ padding: "8px 18px", fontSize: "10px", color: "#475569", textAlign: "center" }}>
+                            + {cls.investors.length - 5} more investors
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
                 </div>
               )}
-            </div>
-          ) : (
-            <p className="text-sm" style={{ color: "var(--color-text-tertiary)" }}>Run a dry run to see the calculated preview before committing.</p>
-          )}
-            </div>
+            </motion.div>
+          );
+        })}
+
+        {/* Confirm footer */}
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginTop: "6px",
+            padding: "16px 20px",
+            background: "rgba(16,24,45,0.72)",
+            border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: "12px",
+            gap: "12px",
+          }}
+        >
+          <div style={{ fontSize: "11px", color: "#475569" }}>
+            {allPass
+              ? "All classes passed reconciliation. Ready to commit."
+              : "Fix the failing classes before committing."}
           </div>
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button
+              onClick={() => setStep("entry")}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#94A3B8",
+                fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+                fontSize: "12px",
+                fontWeight: 500,
+                cursor: "pointer",
+                padding: "9px 16px",
+                borderRadius: "8px",
+              }}
+            >
+              Edit values
+            </button>
+            <button
+              onClick={handleConfirm}
+              disabled={!allPass || submitting}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "7px",
+                background: allPass && !submitting ? "#1A45FF" : "rgba(255,255,255,0.06)",
+                color: allPass && !submitting ? "#fff" : "#475569",
+                border: "none",
+                fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+                fontSize: "12px",
+                fontWeight: 500,
+                cursor: allPass && !submitting ? "pointer" : "not-allowed",
+                padding: "9px 16px",
+                borderRadius: "8px",
+                boxShadow: allPass && !submitting ? "0 0 16px rgba(26,69,255,0.3)" : "none",
+                transition: "all 0.15s",
+              }}
+            >
+              {submitting ? (
+                <>
+                  <div style={{ width: "11px", height: "11px", border: "1.5px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                  <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+                  Committing…
+                </>
+              ) : (
+                <>
+                  Commit valuation
+                  <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                    <path d="M3 7h8M8 4l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Entry state ──
+
+  if (fundsLoading) {
+    return (
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "260px" }}>
+        <div
+          style={{
+            width: "24px",
+            height: "24px",
+            border: "2px solid rgba(255,255,255,0.07)",
+            borderTopColor: "#3B82F6",
+            borderRadius: "50%",
+            animation: "spin 0.8s linear infinite",
+          }}
+        />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          padding: "24px 32px 48px",
+          maxWidth: "800px",
+          margin: "0 auto",
+          fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+          color: "#FFFFFF",
+          textAlign: "center",
+        }}
+      >
+        <div style={{ padding: "64px 24px" }}>
+          <div style={{ fontSize: "17px", fontWeight: 600, marginBottom: "8px" }}>No active share classes</div>
+          <div style={{ fontSize: "13px", color: "#94A3B8", marginBottom: "20px" }}>
+            Set up at least one fund with an active share class before running a valuation.
+          </div>
+          <button
+            onClick={() => navigate(ROUTES.FUND_MANAGE)}
+            style={{
+              padding: "9px 16px",
+              borderRadius: "8px",
+              background: "#1A45FF",
+              color: "#fff",
+              border: "none",
+              fontSize: "12px",
+              fontWeight: 500,
+              cursor: "pointer",
+              fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+            }}
+          >
+            Go to Fund Management
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Group rows by currency for display
+  const keRows = rows.filter((r) => r.currency === "KES");
+  const usdRows = rows.filter((r) => r.currency === "USD");
+
+  const renderClassGroup = (groupRows: ClassRow[], currency: "KES" | "USD") => {
+    if (groupRows.length === 0) return null;
+    const isKes = currency === "KES";
+    const accentColor = isKes ? "var(--color-kes)" : "var(--color-usd)";
+
+    return (
+      <div style={{ marginBottom: "20px" }}>
+        {/* Group header */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "8px",
+            padding: "10px 18px",
+            background: "rgba(255,255,255,0.02)",
+            border: "1px solid rgba(255,255,255,0.07)",
+            borderRadius: "10px 10px 0 0",
+            borderBottom: "none",
+          }}
+        >
+          <CurrencyBadge currency={currency} />
+          <span style={{ fontSize: "11px", color: "#94A3B8", fontWeight: 500 }}>
+            {currency === "KES" ? "Kenyan Shilling classes" : "US Dollar classes"}
+          </span>
+          <span
+            style={{
+              fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
+              fontSize: "10px",
+              color: "#475569",
+              marginLeft: "4px",
+            }}
+          >
+            {groupRows.length} class{groupRows.length !== 1 ? "es" : ""}
+          </span>
+        </div>
+
+        {/* Column headers */}
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1.5fr 1.5fr",
+            gap: "14px",
+            padding: "9px 18px",
+            background: "rgba(255,255,255,0.02)",
+            borderLeft: "1px solid rgba(255,255,255,0.07)",
+            borderRight: "1px solid rgba(255,255,255,0.07)",
+            borderBottom: "1px solid rgba(255,255,255,0.07)",
+            fontSize: "9px",
+            fontWeight: 600,
+            color: "#475569",
+            textTransform: "uppercase",
+            letterSpacing: "0.08em",
+          }}
+        >
+          <div>Class</div>
+          <div>NAV per Share <span style={{ color: "#475569", textTransform: "none", fontWeight: 400, fontSize: "9px" }}>(from AXYS)</span></div>
+          <div>Total Fund NAV <span style={{ color: "#475569", textTransform: "none", fontWeight: 400, fontSize: "9px" }}>(AXYS total)</span></div>
+        </div>
+
+        {/* Class rows */}
+        <div
+          style={{
+            border: "1px solid rgba(255,255,255,0.07)",
+            borderTop: "none",
+            borderRadius: "0 0 10px 10px",
+            overflow: "hidden",
+          }}
+        >
+          {groupRows.map((row, i) => (
+            <div
+              key={row.classId}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "1fr 1.5fr 1.5fr",
+                gap: "14px",
+                padding: "14px 18px",
+                borderBottom: i < groupRows.length - 1 ? "1px solid rgba(255,255,255,0.04)" : "none",
+                background: "rgba(16,24,45,0.72)",
+                alignItems: "start",
+              }}
+            >
+              {/* Class info */}
+              <div>
+                <div
+                  style={{
+                    fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
+                    fontSize: "12px",
+                    fontWeight: 600,
+                    color: accentColor,
+                    marginBottom: "2px",
+                  }}
+                >
+                  {row.classCode}
+                </div>
+                <div style={{ fontSize: "10px", color: "#475569" }}>{row.className}</div>
+                {row.prevNav != null && (
+                  <div
+                    style={{
+                      fontSize: "9px",
+                      color: "#475569",
+                      fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)",
+                      marginTop: "3px",
+                      letterSpacing: "0.02em",
+                    }}
+                  >
+                    prev {formatNav(row.prevNav)}
+                  </div>
+                )}
+              </div>
+
+              {/* NAV per share input */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <input
+                  value={row.navPerShare}
+                  onChange={(e) => updateRow(row.classId, "navPerShare", e.target.value)}
+                  placeholder="e.g. 1389.5737"
+                  style={FIELD_INPUT}
+                  onFocus={focusIn}
+                  onBlur={focusOut}
+                />
+                <div style={{ fontSize: "9px", color: "#475569", letterSpacing: "0.02em" }}>
+                  6 decimal places (e.g. 1389.5737)
+                </div>
+              </div>
+
+              {/* Total fund NAV input */}
+              <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                <input
+                  value={row.totalFundNav}
+                  onChange={(e) => updateRow(row.classId, "totalFundNav", e.target.value)}
+                  placeholder="e.g. 1072636.69"
+                  style={FIELD_INPUT}
+                  onFocus={focusIn}
+                  onBlur={focusOut}
+                />
+                <div style={{ fontSize: "9px", color: "#475569", letterSpacing: "0.02em" }}>
+                  From AXYS NAV statement
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        zIndex: 1,
+        padding: "24px 32px 48px",
+        maxWidth: "900px",
+        margin: "0 auto",
+        fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+        color: "#FFFFFF",
+      }}
+    >
+      {/* Page header */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-end",
+          marginBottom: "22px",
+          gap: "20px",
+          flexWrap: "wrap",
+        }}
+      >
+        <div>
+          <h1
+            style={{
+              fontSize: "22px",
+              fontWeight: 700,
+              color: "#FFFFFF",
+              letterSpacing: "-0.02em",
+              margin: 0,
+              marginBottom: "4px",
+            }}
+          >
+            Monthly Valuation
+          </h1>
+          <div style={{ fontSize: "12px", color: "#94A3B8" }}>
+            Enter NAV per share and total fund NAV from the AXYS statement. System will reconcile and allocate snapshots.
+          </div>
+        </div>
+
+        {/* Valuation date */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "5px" }}>
+          <label style={{ fontSize: "10px", fontWeight: 600, color: "#475569", textTransform: "uppercase", letterSpacing: "0.08em" }}>
+            Valuation Date
+          </label>
+          <input
+            type="date"
+            value={valuationDate}
+            onChange={(e) => setValuationDate(e.target.value)}
+            style={{
+              ...FIELD_INPUT,
+              padding: "8px 10px",
+              colorScheme: "dark",
+              fontSize: "12px",
+              width: "auto",
+            }}
+            onFocus={focusIn}
+            onBlur={focusOut}
+          />
+        </div>
+      </div>
+
+      {/* Amber callout — important rules */}
+      <div
+        style={{
+          padding: "12px 16px",
+          background: "rgba(245,158,11,0.06)",
+          border: "1px solid rgba(245,158,11,0.18)",
+          borderRadius: "9px",
+          display: "flex",
+          gap: "10px",
+          alignItems: "flex-start",
+          marginBottom: "22px",
+          fontSize: "11px",
+          color: "rgba(251,191,36,0.9)",
+          lineHeight: 1.55,
+        }}
+      >
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none" style={{ color: "#F59E0B", flexShrink: 0, marginTop: "1px" }}>
+          <path d="M7 1L1 12h12L7 1z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+          <line x1="7" y1="5.5" x2="7" y2="8" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+          <circle cx="7" cy="10" r="0.6" fill="currentColor" />
+        </svg>
+        <span>
+          Values come directly from the AXYS NAV statement. The system will compute{" "}
+          <strong style={{ color: "#FCD34D" }}>system total NAV = shares × NAV/share</strong>{" "}
+          and compare it to your entered AXYS total. Difference must be &lt; 1.00 to pass reconciliation. Once committed, these values cannot be changed.
+        </span>
+      </div>
+
+      {/* KES classes */}
+      {renderClassGroup(keRows, "KES")}
+      {/* USD classes */}
+      {renderClassGroup(usdRows, "USD")}
+
+      {/* Form footer */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "16px 20px",
+          background: "rgba(16,24,45,0.72)",
+          border: "1px solid rgba(255,255,255,0.07)",
+          borderRadius: "12px",
+          gap: "12px",
+          marginTop: "4px",
+        }}
+      >
+        <div style={{ fontSize: "10px", color: "#475569", fontFamily: "var(--font-mono, 'JetBrains Mono', monospace)", letterSpacing: "0.04em" }}>
+          {canPreview ? "All values entered — ready to preview" : "Enter NAV/share and AXYS total for each class"}
+        </div>
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button
+            onClick={() => navigate(ROUTES.VALUATIONS)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#94A3B8",
+              fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+              fontSize: "12px",
+              fontWeight: 500,
+              cursor: "pointer",
+              padding: "9px 16px",
+              borderRadius: "8px",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handlePreview}
+            disabled={!canPreview || previewing}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "7px",
+              background: canPreview && !previewing ? "#1A45FF" : "rgba(255,255,255,0.06)",
+              color: canPreview && !previewing ? "#fff" : "#475569",
+              border: "none",
+              fontFamily: "var(--font-sans, 'Plus Jakarta Sans', sans-serif)",
+              fontSize: "12px",
+              fontWeight: 500,
+              cursor: canPreview && !previewing ? "pointer" : "not-allowed",
+              padding: "9px 16px",
+              borderRadius: "8px",
+              boxShadow: canPreview && !previewing ? "0 0 16px rgba(26,69,255,0.3)" : "none",
+              transition: "all 0.15s",
+            }}
+          >
+            {previewing ? (
+              <>
+                <div style={{ width: "11px", height: "11px", border: "1.5px solid rgba(255,255,255,0.3)", borderTopColor: "#fff", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+                Previewing…
+              </>
+            ) : (
+              <>
+                Preview reconciliation
+                <svg width="12" height="12" viewBox="0 0 14 14" fill="none">
+                  <path d="M3 7h8M8 4l3 3-3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </>
+            )}
+          </button>
         </div>
       </div>
     </div>

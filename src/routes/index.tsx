@@ -12,12 +12,14 @@ import RegisterPage from "@/pages/auth/RegisterPage";
 
 // ── Lazy-loaded pages (code splitting for bundle size) ──
 
+const LandingPage = lazy(() => import("@/pages/landing/LandingPage"));
 const OverviewPage = lazy(() => import("@/pages/dashboard/OverviewPage"));
 const BatchListPage = lazy(() => import("@/pages/batches/BatchListPage"));
 const BatchCreatePage = lazy(() => import("@/pages/batches/BatchCreatePage"));
 const BatchDetailPage = lazy(() => import("@/pages/batches/BatchDetailPage"));
 const BatchPerformancePage = lazy(() => import("@/pages/batches/BatchPerformancePage"));
 const FundListPage = lazy(() => import("@/pages/funds/FundListPage"));
+const FundManagementPage = lazy(() => import("@/pages/funds/FundManagementPage"));
 const FundDetailPage = lazy(() => import("@/pages/funds/FundDetailPage"));
 const ValuationListPage = lazy(() => import("@/pages/valuations/ValuationListPage"));
 const ValuationCreatePage = lazy(() => import("@/pages/valuations/ValuationCreatePage"));
@@ -25,12 +27,14 @@ const ReportListPage = lazy(() => import("@/pages/reports/ReportListPage"));
 const ReportDetailPage = lazy(() => import("@/pages/reports/ReportDetailPage"));
 const PortfolioPage = lazy(() => import("@/pages/reports/PortfolioPage"));
 const WithdrawalListPage = lazy(() => import("@/pages/withdrawals/WithdrawalListPage"));
+const AddInvestorPage = lazy(() => import("@/pages/investors/AddInvestorPage"));
 const InvestorDirectoryPage = lazy(() => import("../pages/investors/InvestorDirectoryPage"));
 const InvestorOverviewPage = lazy(() => import("../pages/investors/InvestorOverviewPage"));
 const InvestorStatementPage = lazy(() => import("../pages/investors/InvestorStatementPage"));
 const UserManagementPage = lazy(() => import("@/pages/users/UserManagementPage"));
 const AuditLogPage = lazy(() => import("@/pages/audit/AuditLogPage"));
 const SettingsPage = lazy(() => import("@/pages/settings/SettingsPage"));
+const CreditsPage = lazy(() => import("@/pages/credits/CreditsPage"));
 
 // ── Loading fallback (skeleton) ──
 
@@ -59,6 +63,18 @@ function withSuspense(Component: React.LazyExoticComponent<React.ComponentType<a
 // ── Route definitions ──
 
 const routes: RouteObject[] = [
+  // Public: Landing
+  {
+    path: "/",
+    element: withSuspense(LandingPage),
+  },
+
+  // Public: Credits (easter egg)
+  {
+    path: "/credits",
+    element: withSuspense(CreditsPage),
+  },
+
   // Public: Auth
   {
     path: "/login",
@@ -87,6 +103,7 @@ const routes: RouteObject[] = [
 
       // Funds
       { path: "/funds", element: withSuspense(FundListPage) },
+      { path: "/funds/manage", element: withSuspense(FundManagementPage) },
       { path: "/funds/:id", element: withSuspense(FundDetailPage) },
 
       // Valuations
@@ -102,6 +119,7 @@ const routes: RouteObject[] = [
       { path: "/withdrawals", element: withSuspense(WithdrawalListPage) },
 
       // Investor management
+      { path: "/investors/add", element: withSuspense(AddInvestorPage) },
       { path: "/investors", element: withSuspense(InvestorDirectoryPage) },
       { path: "/investors/:clientCode", element: withSuspense(InvestorOverviewPage) },
       { path: "/investors/:clientCode/statement", element: withSuspense(InvestorStatementPage) },
@@ -126,9 +144,6 @@ const routes: RouteObject[] = [
 
   // Dashboard Alias
   { path: "/dashboard", element: <Navigate to="/overview" replace /> },
-
-  // Root redirect
-  { path: "/", element: <Navigate to="/overview" replace /> },
 
   // Catch-all 404
   {

@@ -4,7 +4,15 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useAuth } from "@/context/AuthContext";
+import { setTokens } from "@/lib/auth";
 import { ROUTES } from "@/lib/constants";
+
+// ── DEV ONLY — remove before production ──
+const DEV_CREDENTIALS = {
+  email: "sk@horizonafrica.com",
+  password: "devpreview123",
+};
+// ─────────────────────────────────────────
 
 const loginSchema = z.object({
   email: z.string().email("Valid email is required"),
@@ -13,155 +21,148 @@ const loginSchema = z.object({
 
 type LoginForm = z.infer<typeof loginSchema>;
 
+const inputStyle: React.CSSProperties = {
+  width: "100%", padding: "10px 14px",
+  background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)",
+  borderRadius: "8px", fontSize: "13px", color: "var(--color-text-primary)",
+  outline: "none", fontFamily: "var(--font-sans)",
+  boxSizing: "border-box",
+};
+
+function Label({ children }: { children: React.ReactNode }) {
+  return (
+    <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "var(--color-text-tertiary)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "6px" }}>
+      {children}
+    </label>
+  );
+}
+
 export default function LoginPage() {
   const { login, loading, error, clearError } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [showPassword, setShowPassword] = useState(false);
 
-  const from = (location.state as { from?: { pathname: string } })?.from?.pathname || "/dashboard";
+  const from = (location.state as { from?: { pathname: string } })?.from?.pathname || "/overview";
   const stateEmail = (location.state as { email?: string })?.email || "";
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-  } = useForm<LoginForm>({
+  const { register, handleSubmit, formState: { errors } } = useForm<LoginForm>({
     resolver: zodResolver(loginSchema),
     defaultValues: {
-      email: stateEmail,
+      email: stateEmail || DEV_CREDENTIALS.email,
+      password: DEV_CREDENTIALS.password,
     },
   });
+
+  const handleDevPreview = () => {
+    setTokens("dev-preview-token", "dev-preview-refresh", "super_admin", "Sam (Dev)");
+    navigate(ROUTES.OVERVIEW, { replace: true });
+  };
 
   const onSubmit = async (data: LoginForm) => {
     clearError();
     const success = await login(data.email, data.password);
-    if (success) {
-      navigate(from, { replace: true });
-    }
+    if (success) navigate(from, { replace: true });
   };
 
   return (
-    <div
-      className="min-vh-100 d-flex align-items-center justify-content-center p-4"
-      style={{ background: "var(--color-bg-base)" }}
-    >
-      <div
-        className="card shadow-lg rounded-4 border-0 p-4 p-md-5 bg-dark w-100"
-        style={{ maxWidth: "450px" }}
-      >
+    <div style={{
+      minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+      padding: "24px", background: "var(--color-bg-base)",
+    }}>
+      <div style={{
+        width: "100%", maxWidth: "420px",
+        background: "rgba(16,24,45,0.72)",
+        backdropFilter: "blur(20px) saturate(150%)",
+        WebkitBackdropFilter: "blur(20px) saturate(150%)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: "20px",
+        boxShadow: "0 8px 40px rgba(0,0,0,0.4)",
+        padding: "36px 32px",
+      }}>
         {/* Logo */}
-        <div className="d-flex justify-content-center mb-4">
-          <img src="/NEW AIB AXYS AFRICA LOGO DARK BG.svg" alt="AIB AXYS Africa" className="h-10 w-auto" style={{ height: "40px" }} />
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: "24px" }}>
+          <img src="/logo.webp" alt="AIB AXYS Africa" style={{ height: "36px", objectFit: "contain" }} />
         </div>
 
-        {/* Title */}
-        <h1
-          className="fs-4 fw-bold text-center mb-1"
-          style={{ color: "var(--color-text-primary)" }}
-        >
-          Sign in to OFDS
+        <h1 style={{ fontSize: "20px", fontWeight: 700, textAlign: "center", color: "var(--color-text-primary)", letterSpacing: "-0.02em", marginBottom: "4px" }}>
+          Sign in to OFSD
         </h1>
-        <p
-          className="text-center mb-4"
-          style={{ color: "var(--color-text-secondary)", fontSize: "14px" }}
-        >
-          Operations Fund Distribution System
+        <p style={{ fontSize: "13px", textAlign: "center", color: "var(--color-text-secondary)", marginBottom: "28px" }}>
+          Offshore Fund System & Distribution
         </p>
 
-        {/* Error message */}
         {error && (
-          <div
-            className="rounded-md p-3 mb-4 text-sm border-l-2"
-            style={{
-              background: "var(--color-destructive-bg)",
-              borderColor: "var(--color-destructive)",
-              color: "var(--color-destructive)",
-            }}
-          >
+          <div style={{
+            padding: "10px 14px", marginBottom: "20px", borderRadius: "8px",
+            background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)",
+            fontSize: "13px", color: "#F87171",
+          }}>
             {error}
           </div>
         )}
 
-        {/* Form */}
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-5 mb-5">
-          {/* Email */}
-          <div>
-            <label
-              className="form-label text-muted small fw-bold mb-2 tracking-wide"
-            >
-              Email
-            </label>
-            <input
-              type="email"
-              {...register("email")}
-              className="form-control py-3 border-secondary"
-              placeholder="you@company.com"
-              autoComplete="email"
-              autoFocus
-            />
-            {errors.email && (
-              <p className="text-xs mt-1" style={{ color: "var(--color-destructive)" }}>
-                {errors.email.message}
-              </p>
-            )}
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <div style={{ marginBottom: "16px" }}>
+            <Label>Email</Label>
+            <input type="email" {...register("email")} placeholder="you@company.com" autoComplete="email" autoFocus style={inputStyle} />
+            {errors.email && <p style={{ fontSize: "11px", color: "#F87171", marginTop: "4px" }}>{errors.email.message}</p>}
           </div>
 
-          {/* Password */}
-          <div>
-            <label
-              className="form-label text-muted small fw-bold mb-2 tracking-wide"
-            >
-              Password
-            </label>
-            <div className="position-relative">
-              <input
-                type={showPassword ? "text" : "password"}
-                {...register("password")}
-                className="form-control py-3 border-secondary"
-                placeholder="Enter your password"
-                autoComplete="current-password"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="position-absolute end-0 top-50 translate-middle-y me-3 bg-transparent border-0 small text-muted"
-                tabIndex={-1}
-              >
+          <div style={{ marginBottom: "24px" }}>
+            <Label>Password</Label>
+            <div style={{ position: "relative" }}>
+              <input type={showPassword ? "text" : "password"} {...register("password")} placeholder="Password" autoComplete="current-password" style={inputStyle} />
+              <button type="button" onClick={() => setShowPassword(!showPassword)} tabIndex={-1} style={{
+                position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)",
+                background: "none", border: "none", fontSize: "11px", color: "var(--color-text-tertiary)", cursor: "pointer",
+              }}>
                 {showPassword ? "Hide" : "Show"}
               </button>
             </div>
-            {errors.password && (
-              <p className="text-xs mt-1" style={{ color: "var(--color-destructive)" }}>
-                {errors.password.message}
-              </p>
-            )}
+            {errors.password && <p style={{ fontSize: "11px", color: "#F87171", marginTop: "4px" }}>{errors.password.message}</p>}
           </div>
 
-          {/* Submit */}
-          <button
-            type="submit"
-            disabled={loading}
-            className="btn btn-primary btn-lg rounded-pill w-100 fw-bold mt-4"
-          >
-            {loading ? "Signing in..." : "Sign in"}
+          <button type="submit" disabled={loading} style={{
+            width: "100%", padding: "11px", borderRadius: "10px",
+            background: "#1A45FF", border: "none", color: "#fff",
+            fontSize: "13px", fontWeight: 600, cursor: loading ? "not-allowed" : "pointer",
+            opacity: loading ? 0.7 : 1, boxShadow: "0 0 20px rgba(26,69,255,0.35)",
+          }}>
+            {loading ? "Signing in…" : "Sign in"}
           </button>
         </form>
 
-        {/* Register link */}
-        <p
-          className="text-sm text-center mt-10 mb-0"
-          style={{ color: "var(--color-text-tertiary)" }}
-        >
+        <p style={{ fontSize: "12px", textAlign: "center", color: "var(--color-text-tertiary)", marginTop: "20px", marginBottom: 0 }}>
           Don't have an account?{" "}
-          <Link
-            to={ROUTES.REGISTER}
-            className="font-medium"
-            style={{ color: "var(--color-brand-400)" }}
-          >
+          <Link to={ROUTES.REGISTER} style={{ color: "#60A5FA", textDecoration: "none", fontWeight: 500 }}>
             Register
           </Link>
         </p>
+
+        {/* DEV PREVIEW */}
+        <div style={{ marginTop: "24px", paddingTop: "20px", borderTop: "1px solid rgba(255,255,255,0.07)", textAlign: "center" }}>
+          <span style={{
+            display: "inline-flex", alignItems: "center", gap: "5px",
+            padding: "2px 10px", borderRadius: "100px",
+            background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.2)",
+            fontSize: "9px", fontWeight: 600, color: "#F59E0B", textTransform: "uppercase", letterSpacing: "0.08em",
+            marginBottom: "10px",
+          }}>
+            Dev only
+          </span>
+          <br />
+          <button type="button" onClick={handleDevPreview} style={{
+            background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.25)",
+            color: "#F59E0B", fontSize: "11px", fontWeight: 500,
+            padding: "7px 16px", borderRadius: "8px", cursor: "pointer",
+          }}>
+            Skip to UI preview (no backend)
+          </button>
+          <div style={{ fontSize: "10px", color: "var(--color-text-tertiary)", marginTop: "6px" }}>
+            Injects a fake session · mock data active
+          </div>
+        </div>
       </div>
     </div>
   );

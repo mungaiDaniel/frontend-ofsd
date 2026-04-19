@@ -64,6 +64,16 @@ export interface Batch {
   created_at: string | null;
   investments?: BatchInvestor[];
   grouped_by_fund?: Record<string, BatchFundGroup>;
+  // ── New data model fields ──
+  share_class_id: number | null;
+  class_code?: string;         // denormalized from share_classes join
+  class_currency?: "KES" | "USD"; // denormalized from share_classes join
+  is_open: boolean;
+  auto_close_at: string | null;
+  exported_at: string | null;
+  total_shares: number | null;
+  deployment_nav: number | null;
+  deployment_date_actual: string | null;
 }
 
 export interface BatchInvestor {
@@ -172,10 +182,20 @@ export interface FundBatchSummary {
 export interface CoreFund {
   id: number;
   fund_name: string;
+  fund_code?: string;
   is_active: boolean;
   total_aum?: number;
   investor_count?: number;
   batches?: FundBatchSummary[];
+}
+
+export interface ShareClass {
+  id: number;
+  core_fund_id: number;
+  class_name: string;
+  class_code: string;
+  currency: "KES" | "USD";
+  is_active: boolean;
 }
 
 export interface Fund {
@@ -330,6 +350,57 @@ export interface CreateWithdrawalRequest {
   status?: string;
 }
 
+// ── Reports v2 (Generate & Send) ──
+
+export type EligibleInvestorEmailStatus = "ready" | "no_email" | "already_sent";
+export type ReportRunStatus = "sent" | "partial" | "failed";
+export type RecipientDelivery = "delivered" | "failed" | "pending";
+
+export interface EligibleInvestor {
+  id: number;
+  investor_name: string;
+  internal_client_code: string;
+  fund_name: string;
+  class_code: string;
+  currency: "KES" | "USD";
+  investor_email: string | null;
+  last_statement_date: string | null;
+  email_status: EligibleInvestorEmailStatus;
+}
+
+export interface ReportRun {
+  id: number;
+  sent_at: string;
+  period: string;
+  fund_name: string;
+  class_code: string;
+  recipient_count: number;
+  sent_by: string;
+  status: ReportRunStatus;
+}
+
+export interface ReportRunRecipient {
+  id: number;
+  investor_name: string;
+  internal_client_code: string;
+  investor_email: string;
+  delivery: RecipientDelivery;
+  opened: boolean;
+}
+
+export interface ReportRunDetail {
+  id: number;
+  period: string;
+  generated_at: string;
+  sent_by: string;
+  fund_name: string;
+  class_code: string;
+  currency: "KES" | "USD";
+  recipient_count: number;
+  status: ReportRunStatus;
+  recipients: ReportRunRecipient[];
+}
+
 // ── Audit ──
 
 export interface AuditLogEntry {
@@ -373,4 +444,116 @@ export interface PerformanceExcelRow {
   fund_name: string;
   duration: number;
   performance_percentage: number;
+}
+
+// ── Investor Add Flow ──
+
+export interface InvestorLookup {
+  internal_client_code: string;
+  investor_name: string;
+  investor_email: string;
+  investor_phone: string;
+}
+
+export interface AddNewInvestorRequest {
+  investor_name: string;
+  investor_email: string;
+  investor_phone?: string;
+  internal_client_code: string;
+  fund_id: number;
+  share_class_id: number;
+  deposit_amount: number;
+  deposit_date: string;
+}
+
+export interface AddExistingInvestorRequest {
+  internal_client_code: string;
+  fund_id: number;
+  share_class_id: number;
+  deposit_amount: number;
+  deposit_date: string;
+}
+
+export interface AddInvestorResponse {
+  investment_id: number;
+  batch_id: number;
+  batch_name: string;
+  fund_name: string;
+  class_code: string;
+  currency: "KES" | "USD";
+  deposit_amount: number;
+  batch_close_at: string | null;
+}
+
+// ── NAV-based Valuation (new system) ──
+
+export interface ValuationClassInput {
+  share_class_id: number;
+  nav_per_share: number;
+  total_fund_nav: number;
+}
+
+export interface ValuationRequest {
+  valuation_date: string;
+  classes: ValuationClassInput[];
+}
+
+export interface ValuationClassResult {
+  class_code: string;
+  share_class_id: number;
+  nav_per_share: number;
+  system_total_nav: number;
+  head_office_nav: number;
+  difference: number;
+  status: "PASS" | "FAIL";
+  investors: ValuationInvestorResult[];
+}
+
+export interface ValuationInvestorResult {
+  client_code: string;
+  shares: number;
+  market_value: number;
+  performance_pct: number;
+}
+
+export interface ValuationResponse {
+  valuation_date: string;
+  classes: ValuationClassResult[];
+}
+
+// ── Fund Summary (GET /api/v1/funds/summary) ──
+
+export interface NavHistoryPoint {
+  date: string;   // ISO date string e.g. "2026-04-10"
+  nav: number;
+}
+
+export interface FundSummaryClass {
+  id: number;
+  class_name: string;
+  class_code: string;
+  currency: "KES" | "USD";
+  is_active: boolean;
+  total_shares: number | null;
+  prev_nav: number | null;
+  current_nav: number | null;
+  total_nav: number | null;
+  performance_pct: number | null;
+  valuation_date: string | null;
+  nav_history?: NavHistoryPoint[];
+}
+
+export interface FundSummaryFund {
+  id: number;
+  fund_name: string;
+  fund_code: string;
+  is_active: boolean;
+  classes: FundSummaryClass[];
+  totals_by_currency: { KES?: number; USD?: number };
+  weighted_performance_pct: number | null;
+}
+
+export interface FundSummaryResponse {
+  as_of_date: string;
+  funds: FundSummaryFund[];
 }

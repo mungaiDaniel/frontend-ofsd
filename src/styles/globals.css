@@ -318,6 +318,18 @@ body {
   --topbar-height: 56px;
 }
 
+/* ── Currency tokens (KES = gold, USD = blue) ── */
+:root {
+  --color-kes:        #FCD34D;
+  --color-kes-strong: #F59E0B;
+  --color-kes-bg:     rgba(245,158,11,0.12);
+  --color-kes-border: rgba(245,158,11,0.3);
+  --color-usd:        #60A5FA;
+  --color-usd-strong: #3B82F6;
+  --color-usd-bg:     rgba(59,130,246,0.12);
+  --color-usd-border: rgba(59,130,246,0.3);
+}
+
 /* ══════════════════════════════════════════════════════
    BASE STYLES
    ══════════════════════════════════════════════════════ */

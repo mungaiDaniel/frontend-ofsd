@@ -1,8 +1,13 @@
-import { useEffect } from "react";
-import { Outlet } from "react-router-dom";
+import { useCallback, useEffect } from "react";
+import { Outlet, useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 import { Sidebar } from "./Sidebar";
 import { Topbar } from "./Topbar";
 import { useUI } from "@/context/UIContext";
+import { useAuth } from "@/context/AuthContext";
+import { useKonamiCode } from "@/hooks/useKonamiCode";
+import { useIdleTimeout } from "@/hooks/useIdleTimeout";
+import { ROUTES, IDLE_TIMEOUT_MS } from "@/lib/constants";
 
 /**
  * AppShell wraps all authenticated pages.
@@ -11,6 +16,30 @@ import { useUI } from "@/context/UIContext";
  */
 export function AppShell() {
   const { sidebarCollapsed, isMobile, sidebarMobileOpen, setSidebarMobileOpen } = useUI();
+  const { logout } = useAuth();
+  const navigate = useNavigate();
+
+  useIdleTimeout(IDLE_TIMEOUT_MS, useCallback(() => {
+    logout();
+    toast.info("Signed out due to inactivity");
+    navigate("/");
+  }, [logout, navigate]));
+
+  const onKonami = useCallback(() => {
+    sessionStorage.setItem("credits_from_konami", "1");
+    toast("🎮 Cheat code activated", {
+      style: {
+        background: "#F59E0B",
+        color: "#1C1917",
+        fontWeight: 600,
+        fontSize: "13px",
+      },
+      duration: 2000,
+    });
+    setTimeout(() => navigate(ROUTES.CREDITS), 600);
+  }, [navigate]);
+
+  useKonamiCode(onKonami);
 
   const sidebarWidth = isMobile
     ? "0px"

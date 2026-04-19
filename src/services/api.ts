@@ -1,5 +1,6 @@
 import axios from "axios";
 import { getAccessToken, clearTokens } from "@/lib/auth";
+import { USE_MOCKS } from "@/mocks/index";
 
 // ============================================================================
 // Axios Instance — single source for all API calls
@@ -44,14 +45,25 @@ api.interceptors.response.use(
       typeof message === "string" &&
       message.toLowerCase().includes("pending administrator approval");
 
-    if (status === 401 || gatekeeperBlocked) {
+    // Skip session wipe for dev-preview fake tokens
+    const isDevToken = getAccessToken()?.startsWith("dev-preview");
+    if ((status === 401 || gatekeeperBlocked) && !isDevToken) {
       clearTokens();
       // Redirect to login — using window.location to ensure full page reload
       // and clearing any stale React state
-      window.location.href = "/login";
+      window.location.href = "/";
     }
     return Promise.reject(error);
   }
 );
+
+// ── MOCK INTERCEPTOR (remove when backend ready) ──
+if (USE_MOCKS) {
+  import("@/mocks/handlers").then(({ setupMockHandlers }) => {
+    setupMockHandlers(api);
+    console.warn("[MOCK MODE] All API calls intercepted with mock data");
+  });
+}
+// ─────────────────────────────────────────────────
 
 export default api;

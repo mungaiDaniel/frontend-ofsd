@@ -11,14 +11,8 @@ const registerSchema = z
     name: z
       .string()
       .min(3, "Full name is required")
-      .regex(
-        /^[a-zA-Z\s\-']+$/,
-        "Name can only contain letters, spaces, hyphens, and apostrophes"
-      )
-      .refine(
-        (val) => val.trim().split(/\s+/).length >= 2,
-        "Full name must contain at least two words"
-      ),
+      .regex(/^[a-zA-Z\s\-']+$/, "Letters, spaces, hyphens, and apostrophes only")
+      .refine((val) => val.trim().split(/\s+/).length >= 2, "Must be at least two words"),
     email: z.string().email("Valid email is required"),
     password: z
       .string()
@@ -36,156 +30,123 @@ const registerSchema = z
 
 type RegisterForm = z.infer<typeof registerSchema>;
 
+const inputStyle: React.CSSProperties = {
+  width: "100%", padding: "10px 14px",
+  background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.12)",
+  borderRadius: "8px", fontSize: "13px", color: "var(--color-text-primary)",
+  outline: "none", fontFamily: "var(--font-sans)",
+  boxSizing: "border-box",
+};
+
+function Label({ children }: { children: React.ReactNode }) {
+  return (
+    <label style={{ display: "block", fontSize: "11px", fontWeight: 600, color: "var(--color-text-tertiary)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: "6px" }}>
+      {children}
+    </label>
+  );
+}
+
 export default function RegisterPage() {
   const { register: registerUser, loading, error, clearError } = useAuth();
   const navigate = useNavigate();
   const [showPassword, setShowPassword] = useState(false);
 
-  const {
-    register,
-    handleSubmit,
-    formState: { errors },
-  } = useForm<RegisterForm>({
+  const { register, handleSubmit, formState: { errors } } = useForm<RegisterForm>({
     resolver: zodResolver(registerSchema),
   });
 
   const onSubmit = async (data: RegisterForm) => {
     clearError();
     const success = await registerUser(data.name, data.email, data.password);
-    if (success) {
-      navigate(ROUTES.LOGIN, { replace: true, state: { email: data.email } });
-    }
+    if (success) navigate(ROUTES.LOGIN, { replace: true, state: { email: data.email } });
   };
 
   return (
-    <div
-      className="min-vh-100 d-flex align-items-center justify-content-center p-4 py-5"
-      style={{ background: "var(--color-bg-base)" }}
-    >
-      <div
-        className="card shadow-lg rounded-4 border-0 p-4 p-md-5 bg-dark w-100 my-4"
-        style={{ maxWidth: "450px" }}
-      >
-        <div className="d-flex justify-content-center mb-4">
-          <img src="/NEW AIB AXYS AFRICA LOGO DARK BG.svg" alt="AIB AXYS Africa" className="h-10 w-auto" style={{ height: "40px" }} />
+    <div style={{
+      minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+      padding: "24px", background: "var(--color-bg-base)",
+    }}>
+      <div style={{
+        width: "100%", maxWidth: "420px",
+        background: "rgba(16,24,45,0.72)",
+        backdropFilter: "blur(20px) saturate(150%)",
+        WebkitBackdropFilter: "blur(20px) saturate(150%)",
+        border: "1px solid rgba(255,255,255,0.07)",
+        borderRadius: "20px",
+        boxShadow: "0 8px 40px rgba(0,0,0,0.4)",
+        padding: "36px 32px",
+      }}>
+        {/* Logo */}
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: "24px" }}>
+          <img src="/logo.webp" alt="AIB AXYS Africa" style={{ height: "36px", objectFit: "contain" }} />
         </div>
 
-        <h1
-          className="fs-4 fw-bold text-center mb-1"
-          style={{ color: "var(--color-text-primary)" }}
-        >
+        <h1 style={{ fontSize: "20px", fontWeight: 700, textAlign: "center", color: "var(--color-text-primary)", letterSpacing: "-0.02em", marginBottom: "4px" }}>
           Create account
         </h1>
-        <p
-          className="text-center mb-4"
-          style={{ color: "var(--color-text-secondary)", fontSize: "14px" }}
-        >
-          Register for OFDS access
+        <p style={{ fontSize: "13px", textAlign: "center", color: "var(--color-text-secondary)", marginBottom: "28px" }}>
+          Request access to OFSD
         </p>
 
         {error && (
-          <div
-            className="rounded-md p-3 mb-4 text-sm border-l-2"
-            style={{
-              background: "var(--color-destructive-bg)",
-              borderColor: "var(--color-destructive)",
-              color: "var(--color-destructive)",
-            }}
-          >
+          <div style={{
+            padding: "10px 14px", marginBottom: "20px", borderRadius: "8px",
+            background: "rgba(239,68,68,0.1)", border: "1px solid rgba(239,68,68,0.3)",
+            fontSize: "13px", color: "#F87171",
+          }}>
             {error}
           </div>
         )}
 
-            <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 mb-5">
-              <div className="mb-3">
-                <label className="form-label text-muted small fw-bold mb-2">
-                  Full name
-                </label>
-                <input
-                  {...register("name")}
-                  className="form-control py-3 border-secondary"
-                  placeholder="David Rashid Herbling"
-                  autoComplete="name"
-                  autoFocus
-                />
-                {errors.name && (
-                  <p className="text-xs mt-1" style={{ color: "var(--color-destructive)" }}>{errors.name.message}</p>
-                )}
-              </div>
+        <form onSubmit={handleSubmit(onSubmit)}>
+          <div style={{ marginBottom: "14px" }}>
+            <Label>Full name</Label>
+            <input {...register("name")} placeholder="Jane Doe" autoComplete="name" autoFocus style={inputStyle} />
+            {errors.name && <p style={{ fontSize: "11px", color: "#F87171", marginTop: "4px" }}>{errors.name.message}</p>}
+          </div>
 
-              <div className="mb-3">
-                <label className="form-label text-muted small fw-bold mb-2">
-                  Email
-                </label>
-                <input
-                  type="email"
-                  {...register("email")}
-                  className="form-control py-3 border-secondary"
-                  placeholder="you@company.com"
-                  autoComplete="email"
-                />
-                {errors.email && (
-                  <p className="text-xs mt-1" style={{ color: "var(--color-destructive)" }}>{errors.email.message}</p>
-                )}
-              </div>
+          <div style={{ marginBottom: "14px" }}>
+            <Label>Email</Label>
+            <input type="email" {...register("email")} placeholder="you@company.com" autoComplete="email" style={inputStyle} />
+            {errors.email && <p style={{ fontSize: "11px", color: "#F87171", marginTop: "4px" }}>{errors.email.message}</p>}
+          </div>
 
-              <div className="mb-3">
-                <label className="form-label text-muted small fw-bold mb-2">
-                  Password
-                </label>
-                <div className="position-relative">
-                  <input
-                    type={showPassword ? "text" : "password"}
-                    {...register("password")}
-                    className="form-control py-3 border-secondary"
-                    placeholder="Min 8 chars, upper, lower, number, special"
-                    autoComplete="new-password"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="position-absolute end-0 top-50 translate-middle-y me-3 bg-transparent border-0 small text-muted"
-                    tabIndex={-1}
-                  >
-                    {showPassword ? "Hide" : "Show"}
-                  </button>
-                </div>
-                {errors.password && (
-                  <p className="text-xs mt-1" style={{ color: "var(--color-destructive)" }}>{errors.password.message}</p>
-                )}
-              </div>
-
-              <div className="mb-4">
-                <label className="form-label text-muted small fw-bold mb-2">
-                  Confirm password
-                </label>
-                <input
-                  type="password"
-                  {...register("confirmPassword")}
-                  className="form-control py-3 border-secondary"
-                  placeholder="Re-enter password"
-                  autoComplete="new-password"
-                />
-                {errors.confirmPassword && (
-                  <p className="text-xs mt-1" style={{ color: "var(--color-destructive)" }}>{errors.confirmPassword.message}</p>
-                )}
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="btn btn-primary btn-lg rounded-pill w-100 fw-bold mt-2"
-              >
-                {loading ? "Creating account..." : "Create account"}
+          <div style={{ marginBottom: "14px" }}>
+            <Label>Password</Label>
+            <div style={{ position: "relative" }}>
+              <input type={showPassword ? "text" : "password"} {...register("password")} placeholder="Min 8 chars, upper, lower, number, symbol" autoComplete="new-password" style={inputStyle} />
+              <button type="button" onClick={() => setShowPassword(!showPassword)} tabIndex={-1} style={{
+                position: "absolute", right: "12px", top: "50%", transform: "translateY(-50%)",
+                background: "none", border: "none", fontSize: "11px", color: "var(--color-text-tertiary)", cursor: "pointer",
+              }}>
+                {showPassword ? "Hide" : "Show"}
               </button>
-            </form>
+            </div>
+            {errors.password && <p style={{ fontSize: "11px", color: "#F87171", marginTop: "4px" }}>{errors.password.message}</p>}
+          </div>
 
-            <p className="text-sm text-center mt-10" style={{ color: "var(--color-text-tertiary)" }}>
-              Already have an account?{" "}
-              <Link to={ROUTES.LOGIN} className="font-medium" style={{ color: "var(--color-brand-400)" }}>
-                Sign in
-              </Link>
-            </p>
+          <div style={{ marginBottom: "24px" }}>
+            <Label>Confirm password</Label>
+            <input type="password" {...register("confirmPassword")} placeholder="Re-enter password" autoComplete="new-password" style={inputStyle} />
+            {errors.confirmPassword && <p style={{ fontSize: "11px", color: "#F87171", marginTop: "4px" }}>{errors.confirmPassword.message}</p>}
+          </div>
+
+          <button type="submit" disabled={loading} style={{
+            width: "100%", padding: "11px", borderRadius: "10px",
+            background: "#1A45FF", border: "none", color: "#fff",
+            fontSize: "13px", fontWeight: 600, cursor: loading ? "not-allowed" : "pointer",
+            opacity: loading ? 0.7 : 1, boxShadow: "0 0 20px rgba(26,69,255,0.35)",
+          }}>
+            {loading ? "Creating account…" : "Create account"}
+          </button>
+        </form>
+
+        <p style={{ fontSize: "12px", textAlign: "center", color: "var(--color-text-tertiary)", marginTop: "20px", marginBottom: 0 }}>
+          Already have an account?{" "}
+          <Link to={ROUTES.LOGIN} style={{ color: "#60A5FA", textDecoration: "none", fontWeight: 500 }}>
+            Sign in
+          </Link>
+        </p>
       </div>
     </div>
   );

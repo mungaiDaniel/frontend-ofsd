@@ -111,16 +111,39 @@ export function Sidebar() {
             overflow: "hidden",
           }}
         >
-          <img
-            src="/NEW AIB AXYS AFRICA LOGO DARK BG.svg"
-            alt="AIB AXYS Africa"
-            style={{
-              height: isMobile || !sidebarCollapsed ? "28px" : "24px",
-              width: "auto",
-              maxWidth: isMobile || !sidebarCollapsed ? "200px" : "32px",
-              objectFit: "contain",
-            }}
-          />
+          <div style={{ position: "relative", height: "36px", width: isMobile || !sidebarCollapsed ? "auto" : "36px", display: "flex", alignItems: "center" }}>
+            {/* Full logo — shown when expanded */}
+            <img
+              src="/logo.webp"
+              alt="OFSD"
+              style={{
+                height: "28px",
+                width: "auto",
+                maxWidth: "160px",
+                objectFit: "contain",
+                opacity: isMobile || !sidebarCollapsed ? 1 : 0,
+                transition: "opacity 0.25s",
+                pointerEvents: isMobile || !sidebarCollapsed ? "auto" : "none",
+                position: "absolute",
+                left: 0,
+              }}
+            />
+            {/* Emblem — shown when collapsed */}
+            <img
+              src="/emblem.webp"
+              alt="OFSD"
+              style={{
+                height: "34px",
+                width: "34px",
+                objectFit: "contain",
+                opacity: !isMobile && sidebarCollapsed ? 1 : 0,
+                transition: "opacity 0.25s",
+                pointerEvents: !isMobile && sidebarCollapsed ? "auto" : "none",
+                position: isMobile || !sidebarCollapsed ? "relative" : "absolute",
+                left: 0,
+              }}
+            />
+          </div>
         </div>
         {isMobile && (
           <button

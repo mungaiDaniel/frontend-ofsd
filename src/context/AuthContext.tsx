@@ -118,12 +118,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       let message = "Login failed. Please check your credentials.";
       const status = (err as any)?.response?.status;
       const errResponse = (err as any)?.response?.data;
-      if (status === 403) {
+      const isNetworkError = !(err as any)?.response && (err as any)?.message === "Network Error";
+      if (isNetworkError) {
+        message = "Cannot reach the server. Check that the backend is running.";
+      } else if (status === 403) {
         message = "Account Pending Approval. Please contact the system administrator.";
-      }
-      if (errResponse?.message) {
-        message = typeof errResponse.message === "string" 
-          ? errResponse.message 
+      } else if (errResponse?.message) {
+        message = typeof errResponse.message === "string"
+          ? errResponse.message
           : JSON.stringify(errResponse.message);
       } else if ((err as any)?.message) {
         message = (err as any).message;
@@ -165,6 +167,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(() => {
     clearTokens();
     dispatch({ type: "LOGOUT" });
+    window.location.href = "/";
   }, []);
 
   const clearError = useCallback(() => {

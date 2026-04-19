@@ -1,13 +1,39 @@
 import { useEffect, useState, useRef } from "react";
-import { StatusBadge } from "@/components/data/StatusBadge";
 import { withdrawalService } from "@/services/withdrawalService";
-import { formatCurrency, formatDate } from "@/lib/utils";
+import { formatDate } from "@/lib/utils";
 import type { Withdrawal } from "@/lib/types";
 import { toast } from "sonner";
 import { Upload, Check, X } from "lucide-react";
 
 const FILTERS = ["", "Pending", "Approved", "Rejected"] as const;
 const FILTER_LABELS: Record<string, string> = { "": "All", Pending: "Pending", Approved: "Approved", Rejected: "Rejected" };
+
+const glass: React.CSSProperties = {
+  background: "rgba(16,24,45,0.72)",
+  backdropFilter: "blur(20px) saturate(150%)",
+  WebkitBackdropFilter: "blur(20px) saturate(150%)",
+  border: "1px solid rgba(255,255,255,0.07)",
+  borderRadius: "16px",
+  boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
+};
+
+function StatusPill({ status }: { status: string }) {
+  const colors: Record<string, { bg: string; color: string }> = {
+    Pending:  { bg: "rgba(245,158,11,0.12)",  color: "#F59E0B" },
+    Approved: { bg: "rgba(34,197,94,0.12)",   color: "#22C55E" },
+    Rejected: { bg: "rgba(239,68,68,0.12)",   color: "#F87171" },
+  };
+  const c = colors[status] ?? { bg: "rgba(255,255,255,0.06)", color: "var(--color-text-tertiary)" };
+  return (
+    <span style={{
+      display: "inline-block", padding: "2px 8px", borderRadius: "100px",
+      fontSize: "9px", fontWeight: 600, letterSpacing: "0.05em",
+      background: c.bg, color: c.color,
+    }}>
+      {status}
+    </span>
+  );
+}
 
 export default function WithdrawalListPage() {
   const [withdrawals, setWithdrawals] = useState<Withdrawal[]>([]);
@@ -45,163 +71,156 @@ export default function WithdrawalListPage() {
     setProcessing(withdrawalId);
     try {
       await withdrawalService.approve(withdrawalId);
-      toast.success(`✅ Withdrawal approved for ${clientId}`);
-      await load(); // Reload list
+      toast.success(`Withdrawal approved for ${clientId}`);
+      await load();
       window.dispatchEvent(new Event("dashboard_stats_dirty"));
     } catch (err: any) {
       toast.error(err.response?.data?.message || "Failed to approve");
-    } finally {
-      setProcessing(null);
-    }
+    } finally { setProcessing(null); }
   };
 
   const onReject = async (withdrawalId: number, clientId: string) => {
     setProcessing(withdrawalId);
     try {
       await withdrawalService.reject(withdrawalId);
-      toast.success(`❌ Withdrawal rejected for ${clientId}`);
-      await load(); // Reload list
+      toast.success(`Withdrawal rejected for ${clientId}`);
+      await load();
       window.dispatchEvent(new Event("dashboard_stats_dirty"));
     } catch (err: any) {
       toast.error(err.response?.data?.message || "Failed to reject");
-    } finally {
-      setProcessing(null);
-    }
+    } finally { setProcessing(null); }
   };
 
-  const pillStyle = (active: boolean) => ({
-    fontSize: "11px",
-    fontWeight: 600 as const,
-    padding: "4px 14px",
-    borderRadius: "20px",
-    border: active ? "1px solid var(--color-brand-400)" : "1px solid rgba(255,255,255,0.1)",
-    background: active ? "var(--color-brand-50)" : "transparent",
-    color: active ? "var(--color-brand-300)" : "var(--color-text-secondary)",
-    cursor: "pointer" as const,
-    transition: "all 0.15s",
-  });
-
   const totalAmount = withdrawals.reduce((s, w) => s + w.amount, 0);
+  const pendingCount = withdrawals.filter((w) => w.status === "Pending").length;
 
   return (
-    <div className="container-fluid px-0">
+    <div>
       {/* Header */}
       <div className="page-header-row mb-4">
         <div>
-          <h1 className="fw-bold mb-1" style={{ fontSize: "22px", color: "var(--color-text-primary)" }}>
+          <h1 style={{ fontSize: "22px", fontWeight: 700, color: "var(--color-text-primary)", letterSpacing: "-0.02em", marginBottom: "4px" }}>
             Withdrawals
           </h1>
-          <p className="mb-0" style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>
-            Track and manage investor withdrawal requests
+          <p style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>
+            Track and approve investor withdrawal requests
+            {pendingCount > 0 && (
+              <span style={{ marginLeft: "8px", fontSize: "10px", padding: "2px 8px", borderRadius: "100px", background: "rgba(245,158,11,0.12)", color: "#F59E0B", fontWeight: 600 }}>
+                {pendingCount} pending
+              </span>
+            )}
           </p>
         </div>
         <div>
-          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" className="d-none" onChange={onUpload} />
+          <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={onUpload} />
           <button
             onClick={() => fileRef.current?.click()}
             disabled={uploading}
-            className="btn btn-sm d-flex align-items-center gap-2 fw-bold"
             style={{
-              padding: "8px 18px",
-              borderRadius: "20px",
-              border: "1px solid rgba(255,255,255,0.15)",
-              background: "transparent",
-              color: "var(--color-text-secondary)",
+              display: "flex", alignItems: "center", gap: "6px",
+              padding: "8px 16px", borderRadius: "8px",
+              background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)",
+              color: "var(--color-text-secondary)", fontSize: "12px", fontWeight: 500,
+              cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.7 : 1,
             }}
           >
-            <Upload size={14} /> {uploading ? "Uploading..." : "Upload Excel"}
+            <Upload size={14} /> {uploading ? "Uploading…" : "Upload Excel"}
           </button>
         </div>
       </div>
 
       {/* Table card */}
-      <div className="card shadow">
+      <div style={glass}>
         {/* Filter bar */}
-        <div
-          className="d-flex align-items-center gap-2 px-4 py-3"
-          style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
-        >
-          {FILTERS.map((f) => (
-            <button key={f || "all"} onClick={() => setFilter(f)} style={pillStyle(filter === f)}>
-              {FILTER_LABELS[f]}
-            </button>
-          ))}
+        <div style={{ display: "flex", alignItems: "center", gap: "6px", padding: "12px 16px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          {FILTERS.map((f) => {
+            const active = filter === f;
+            return (
+              <button key={f || "all"} onClick={() => setFilter(f)} style={{
+                padding: "4px 14px", borderRadius: "100px",
+                fontSize: "11px", fontWeight: 600,
+                border: active ? "1px solid rgba(59,130,246,0.5)" : "1px solid rgba(255,255,255,0.08)",
+                background: active ? "rgba(59,130,246,0.12)" : "transparent",
+                color: active ? "#60A5FA" : "var(--color-text-secondary)",
+                cursor: "pointer", transition: "all 0.15s",
+              }}>
+                {FILTER_LABELS[f]}
+              </button>
+            );
+          })}
         </div>
 
-        {/* Table */}
         {loading ? (
-          <div className="d-flex align-items-center justify-content-center py-5">
-            <div className="spinner-border spinner-border-sm" style={{ color: "var(--color-brand-400)" }} role="status">
-              <span className="visually-hidden">Loading...</span>
-            </div>
+          <div style={{ display: "flex", justifyContent: "center", padding: "48px 0" }}>
+            <div style={{ width: "24px", height: "24px", border: "2px solid rgba(255,255,255,0.08)", borderTopColor: "#3B82F6", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+          </div>
+        ) : withdrawals.length === 0 ? (
+          <div style={{ padding: "48px", textAlign: "center", color: "var(--color-text-tertiary)", fontSize: "13px" }}>
+            No withdrawals{filter ? ` with status "${filter}"` : ""}.
           </div>
         ) : (
-          <div className="table-responsive">
-            <table className="table table-dark mb-0" style={{ background: "var(--color-bg-surface)" }}>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
-                <tr>
+                <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
                   {[
-                    { label: "Client Code", align: "left"  },
-                    { label: "Fund",        align: "left"  },
-                    { label: "Amount",      align: "right" },
-                    { label: "Status",      align: "left"  },
-                    { label: "Date",        align: "left"  },
-                    { label: "Approved",    align: "left"  },
-                    { label: "Actions",     align: "center" },
+                    { label: "Client Code", align: "left" },
+                    { label: "Fund", align: "left" },
+                    { label: "Amount", align: "right" },
+                    { label: "Status", align: "left" },
+                    { label: "Date", align: "left" },
+                    { label: "Approved", align: "left" },
+                    { label: "Actions", align: "center" },
                   ].map((h) => (
-                    <th key={h.label} style={{ textAlign: h.align as "left" | "right" | "center" }}>{h.label}</th>
+                    <th key={h.label} style={{
+                      padding: "10px 16px", textAlign: h.align as "left" | "right" | "center",
+                      fontSize: "9px", fontWeight: 700, letterSpacing: "0.08em", textTransform: "uppercase",
+                      color: "var(--color-text-tertiary)",
+                    }}>{h.label}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {withdrawals.map((w) => (
-                  <tr key={w.id}>
-                    <td style={{ fontFamily: "var(--font-mono)", fontSize: "12px" }}>{w.client_id}</td>
-                    <td className="fw-bold" style={{ fontSize: "13px" }}>{w.fund_name}</td>
-                    <td className="text-end" style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--color-destructive)" }}>
-                      {formatCurrency(w.amount)}
+                  <tr key={w.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.04)" }}>
+                    <td style={{ padding: "11px 16px", fontFamily: "var(--font-mono)", fontSize: "11px", fontWeight: 700, color: "var(--color-text-primary)" }}>{w.client_id}</td>
+                    <td style={{ padding: "11px 16px", fontSize: "12px", fontWeight: 600, color: "var(--color-text-primary)" }}>{w.fund_name}</td>
+                    <td style={{ padding: "11px 16px", textAlign: "right", fontFamily: "var(--font-mono)", fontSize: "12px", color: "#F87171", fontWeight: 600 }}>
+                      {w.amount.toLocaleString("en-US", { maximumFractionDigits: 0 })}
                     </td>
-                    <td><StatusBadge status={w.status} /></td>
-                    <td style={{ color: "var(--color-text-secondary)", fontSize: "12px" }}>{formatDate(w.date_withdrawn)}</td>
-                    <td style={{ color: "var(--color-text-tertiary)", fontSize: "12px" }}>{formatDate(w.approved_at)}</td>
-                    <td style={{ textAlign: "center" }}>
+                    <td style={{ padding: "11px 16px" }}><StatusPill status={w.status} /></td>
+                    <td style={{ padding: "11px 16px", fontSize: "12px", color: "var(--color-text-secondary)" }}>{formatDate(w.date_withdrawn)}</td>
+                    <td style={{ padding: "11px 16px", fontSize: "12px", color: "var(--color-text-tertiary)" }}>{formatDate(w.approved_at)}</td>
+                    <td style={{ padding: "11px 16px", textAlign: "center" }}>
                       {w.status === "Pending" ? (
-                        <div className="d-flex gap-2 justify-content-center">
+                        <div style={{ display: "flex", gap: "6px", justifyContent: "center" }}>
                           <button
                             onClick={() => onApprove(w.id, w.client_id)}
                             disabled={processing === w.id}
-                            className="btn btn-sm d-flex align-items-center gap-1"
                             style={{
-                              padding: "4px 10px",
-                              fontSize: "11px",
-                              borderRadius: "12px",
-                              border: "none",
-                              background: "#00005b",
-                              color: "#ffffff",
+                              display: "flex", alignItems: "center", gap: "4px",
+                              padding: "4px 10px", borderRadius: "6px", border: "none",
+                              fontSize: "11px", fontWeight: 500,
+                              background: "rgba(34,197,94,0.12)", color: "#22C55E",
                               cursor: processing === w.id ? "not-allowed" : "pointer",
-                              opacity: processing === w.id ? 0.7 : 1,
+                              opacity: processing === w.id ? 0.6 : 1,
                             }}
-                            title="Approve this withdrawal"
                           >
-                            <Check size={12} /> Approve
+                            <Check size={11} /> Approve
                           </button>
                           <button
                             onClick={() => onReject(w.id, w.client_id)}
                             disabled={processing === w.id}
-                            className="btn btn-sm d-flex align-items-center gap-1"
                             style={{
-                              padding: "4px 10px",
-                              fontSize: "11px",
-                              borderRadius: "12px",
-                              border: "none",
-                              background: "rgba(239, 68, 68, 0.15)",
-                              color: "#ef4444",
+                              display: "flex", alignItems: "center", gap: "4px",
+                              padding: "4px 10px", borderRadius: "6px", border: "none",
+                              fontSize: "11px", fontWeight: 500,
+                              background: "rgba(239,68,68,0.12)", color: "#F87171",
                               cursor: processing === w.id ? "not-allowed" : "pointer",
-                              opacity: processing === w.id ? 0.7 : 1,
+                              opacity: processing === w.id ? 0.6 : 1,
                             }}
-                            title="Reject this withdrawal"
                           >
-                            <X size={12} /> Reject
+                            <X size={11} /> Reject
                           </button>
                         </div>
                       ) : (
@@ -210,27 +229,19 @@ export default function WithdrawalListPage() {
                     </td>
                   </tr>
                 ))}
-                {withdrawals.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="text-center py-5" style={{ color: "var(--color-text-tertiary)" }}>
-                      No withdrawals found.
-                    </td>
-                  </tr>
-                )}
               </tbody>
             </table>
           </div>
         )}
 
         {/* Footer */}
-        <div
-          className="d-flex align-items-center justify-content-between px-4 py-2"
-          style={{ borderTop: "1px solid rgba(255,255,255,0.06)", fontSize: "11px", color: "var(--color-text-tertiary)" }}
-        >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderTop: "1px solid rgba(255,255,255,0.06)", fontSize: "11px", color: "var(--color-text-tertiary)" }}>
           <span>{withdrawals.length} withdrawal{withdrawals.length !== 1 ? "s" : ""}</span>
-          <span>Total: {formatCurrency(totalAmount)}</span>
+          <span>Total: {totalAmount.toLocaleString("en-US", { maximumFractionDigits: 0 })}</span>
         </div>
       </div>
+
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
     </div>
   );
 }

@@ -6,3 +6,9 @@ dist
 .DS_Store
 .vscode
 coverage
+# Add these entries to your existing .gitignore if not already present
+.env.local
+.env.*.local
+node_modules/
+dist/
+.vite/

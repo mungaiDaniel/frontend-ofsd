@@ -1,522 +1,446 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { KPICard } from "@/components/data/KPICard";
-import { StatusBadge } from "@/components/data/StatusBadge";
-import { BatchStageStepper } from "@/components/data/BatchStageStepper";
-import { ChartCard } from "@/components/charts/ChartCard";
-import { FundPerformanceLineChart } from "@/components/charts/FundPerformanceLineChart";
-import { PortfolioAUMChart } from "@/components/charts/PortfolioAUMChart";
-import { DepositsWithdrawalsBarChart } from "@/components/charts/DepositsWithdrawalsBarChart";
-import { FundAllocationDoughnut } from "@/components/charts/FundAllocationDoughnut";
+import { fundSummaryService } from "@/services/fundSummaryService";
 import { batchService } from "@/services/batchService";
-import { reportService } from "@/services/reportService";
-import { withdrawalService } from "@/services/withdrawalService";
-import { dashboardService, OverviewStats, FlowPoint } from "@/services/dashboardService";
-import { calculateGlobalTotals, aggregateFundMetrics } from "@/lib/batchCalculations";
-import { formatCurrency, formatCurrencyCompact, formatDate } from "@/lib/utils";
-import { getBatchDepositBaseTotal, getEntryFeePercent, getInvestorPrincipalAfterTransfer } from "@/lib/transferDeductions";
-import { getFundColor, FLOW_COLORS } from "@/lib/chartConfig";
-import { ROUTES } from "@/lib/constants";
-import type { Batch, ReportSummary } from "@/lib/types";
-import { ChevronRight } from "lucide-react";
+import api from "@/services/api";
+import { formatDate } from "@/lib/utils";
+import { ROUTES, API } from "@/lib/constants";
+import type { FundSummaryResponse, FundSummaryClass, Batch } from "@/lib/types";
+import { NAVLineChart } from "@/components/data/NAVLineChart";
 
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * OVERVIEW PAGE — BATCH-FIRST CALCULATION APPROACH
- * ═══════════════════════════════════════════════════════════════════════════════
- * 
- * This Overview page derives ALL global totals from Batch-level aggregations,
- * ensuring perfect synchronization with Batch Detail pages.
- * 
- * LOGIC SYNCHRONIZATION:
- * - Total AUM        = SUM(all batches' current_balance)
- * - Total Profit     = SUM(all batches' end_balance) - SUM(all batches' deposits)
- * - Total Withdrawals = SUM(all investments' withdrawals)
- * - Fund Performance  = Weighted average of fund performance across active batches
- * 
- * This eliminates discrepancies: Overview totals = SUM(Batch1 + Batch2 + Batch3...)
- * 
- * See: lib/batchCalculations.ts for the shared utility functions.
- * ═══════════════════════════════════════════════════════════════════════════════
- */
+// ── Helpers ──
+
+function formatNav(n: number | null | undefined, decimals = 4) {
+  if (n == null) return "—";
+  return n.toLocaleString("en-US", { minimumFractionDigits: decimals, maximumFractionDigits: decimals });
+}
+
+
+function formatPerf(p: number | null | undefined) {
+  if (p == null) return null;
+  return (p >= 0 ? "+" : "") + p.toFixed(2) + "%";
+}
+
+function msUntil(isoDate: string): { days: number; hours: number } {
+  const diff = new Date(isoDate).getTime() - Date.now();
+  if (diff <= 0) return { days: 0, hours: 0 };
+  const hours = Math.floor(diff / 3_600_000);
+  return { days: Math.floor(hours / 24), hours: hours % 24 };
+}
+
+
+// ── Type badges ──
+type TxType = "deposit" | "withdrawal" | "valuation";
+
+function TypeBadge({ type }: { type: TxType }) {
+  const map: Record<TxType, { label: string; bg: string; color: string }> = {
+    deposit:    { label: "Deposit",    bg: "rgba(59,130,246,0.12)",  color: "#60A5FA" },
+    withdrawal: { label: "Withdrawal", bg: "rgba(245,158,11,0.12)",  color: "#F59E0B" },
+    valuation:  { label: "Valuation",  bg: "rgba(245,208,11,0.12)",  color: "#FCD34D" },
+  };
+  const s = map[type] ?? map.deposit;
+  return (
+    <span style={{
+      display: "inline-block", padding: "2px 8px", borderRadius: "4px",
+      fontSize: "10px", fontWeight: 600, letterSpacing: "0.04em",
+      background: s.bg, color: s.color,
+    }}>
+      {s.label}
+    </span>
+  );
+}
+
+// ── Status dot ──
+function StatusDot({ status }: { status: string }) {
+  const s = status?.toLowerCase();
+  const color = s === "completed" || s === "committed" ? "#22c55e"
+    : s === "pending" ? "#F59E0B"
+    : "#475569";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: "5px" }}>
+      <span style={{ width: "5px", height: "5px", borderRadius: "50%", background: color, display: "inline-block" }} />
+      <span style={{ fontSize: "11px", color: "var(--color-text-secondary)" }}>{status}</span>
+    </span>
+  );
+}
+
+// ── Glass card ──
+const glass: React.CSSProperties = {
+  background: "rgba(16,24,45,0.72)",
+  backdropFilter: "blur(20px) saturate(150%)",
+  WebkitBackdropFilter: "blur(20px) saturate(150%)",
+  border: "1px solid rgba(255,255,255,0.07)",
+  borderRadius: "16px",
+  boxShadow: "0 8px 32px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05)",
+};
+
+// ── Currency badge ──
+function CurrBadge({ currency }: { currency: "KES" | "USD" }) {
+  const isKes = currency === "KES";
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center",
+      padding: "1px 6px", borderRadius: "4px",
+      fontSize: "9px", fontWeight: 700, letterSpacing: "0.06em",
+      fontFamily: "var(--font-mono)",
+      background: isKes ? "var(--color-kes-bg)" : "var(--color-usd-bg)",
+      color: isKes ? "var(--color-kes)" : "var(--color-usd)",
+      border: isKes ? "1px solid var(--color-kes-border)" : "1px solid var(--color-usd-border)",
+    }}>
+      {currency}
+    </span>
+  );
+}
+
+// ── Countdown pill ──
+function CountdownPill({ closeAt }: { closeAt: string }) {
+  const { days, hours } = msUntil(closeAt);
+  if (days <= 0 && hours <= 0) return <span style={{ fontSize: "10px", color: "#475569" }}>Closed</span>;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: "4px",
+      padding: "2px 7px", borderRadius: "100px",
+      background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)",
+      fontSize: "10px", fontWeight: 600, color: "#F59E0B",
+    }}>
+      {days > 0 ? `${days}d ${hours}h` : `${hours}h`}
+    </span>
+  );
+}
+
 export default function OverviewPage() {
   const navigate = useNavigate();
-  const [batches, setBatches] = useState<Batch[]>([]);
-  const [reports, setReports] = useState<ReportSummary[]>([]);
+  const [summary, setSummary] = useState<FundSummaryResponse | null>(null);
+  const [openBatches, setOpenBatches] = useState<Batch[]>([]);
+  const [transactions, setTransactions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState<"All" | "Active" | "Pending" | "Closed">("All");
-  const [overviewStats, setOverviewStats] = useState<OverviewStats | null>(null);
-  const [globalWithdrawals, setGlobalWithdrawals] = useState<number>(0);
-  const [refreshNonce, setRefreshNonce] = useState(0);
-  const [clientFlowByBatch, setClientFlowByBatch] = useState<{
-    labels: string[];
-    batches: { batch_id: number; batch_name: string; deposits: number[] }[];
-    withdrawals: number[];
-  } | null>(null);
 
   useEffect(() => {
-    async function load() {
-      setLoading(true);
-      try {
-        // Fetch all batches and reports
-        const [batchesRes, reportsRes, overviewRes, withdrawalsRes] = await Promise.allSettled([
-          batchService.getAll(),
-          reportService.getAll(),
-          dashboardService.getOverviewStats(),
-          withdrawalService.getAll()
-        ]);
-
-        let enrichedBatches: Batch[] = [];
-        if (batchesRes.status === "fulfilled") {
-          enrichedBatches = batchesRes.value;
-          setBatches(enrichedBatches);
-
-          // Build a transaction-date fallback for Deposits vs Withdrawals chart
-          // from actual investment rows (date_deposited) in each batch detail.
-          try {
-            const detailResults = await Promise.allSettled(
-              enrichedBatches.map((b) => batchService.getById(b.id))
-            );
-
-            const labelsMap: Record<string, number> = {};
-            const byBatch: Record<number, { batch_id: number; batch_name: string; byLabel: Record<string, number> }> = {};
-            const withdrawalsByLabel: Record<string, number> = {};
-
-            for (const res of detailResults) {
-              if (res.status !== "fulfilled") continue;
-              const detail: any = res.value;
-              const batchId = Number(detail?.id);
-              const batchName = String(detail?.batch_name || `Batch ${batchId}`);
-              const invs: any[] = Array.isArray(detail?.investments) ? detail.investments : [];
-              if (!byBatch[batchId]) byBatch[batchId] = { batch_id: batchId, batch_name: batchName, byLabel: {} };
-
-              const batchBaseTotal = getBatchDepositBaseTotal(invs);
-              const entryFeePercent = getEntryFeePercent(detail);
-              const transferTransactionCost = Number(detail?.transfer_transaction_cost ?? 0);
-
-              for (const inv of invs) {
-                const raw = inv?.date_deposited;
-                if (!raw) continue;
-                const dt = new Date(raw);
-                if (Number.isNaN(dt.getTime())) continue;
-                const label = dt.toLocaleDateString("en-GB", { month: "short", day: "2-digit", year: "numeric" });
-                labelsMap[label] = dt.getTime();
-                const dep = getInvestorPrincipalAfterTransfer(inv, {
-                  stage: detail?.stage,
-                  batchTotalDepositBase: batchBaseTotal,
-                  transferTransactionCost,
-                  entryFeePercent,
-                });
-                byBatch[batchId].byLabel[label] = (byBatch[batchId].byLabel[label] || 0) + dep;
-                const wd = Number(inv?.withdrawals ?? 0);
-                withdrawalsByLabel[label] = (withdrawalsByLabel[label] || 0) + wd;
-              }
-            }
-
-            const labels = Object.entries(labelsMap)
-              .sort((a, b) => a[1] - b[1])
-              .map(([l]) => l);
-
-            if (labels.length > 0) {
-              setClientFlowByBatch({
-                labels,
-                batches: Object.values(byBatch).map((b) => ({
-                  batch_id: b.batch_id,
-                  batch_name: b.batch_name,
-                  deposits: labels.map((l) => Number(b.byLabel[l] || 0)),
-                })),
-                withdrawals: labels.map((l) => Number(withdrawalsByLabel[l] || 0)),
-              });
-            } else {
-              setClientFlowByBatch(null);
-            }
-          } catch {
-            setClientFlowByBatch(null);
-          }
-        }
-        if (reportsRes.status === "fulfilled") setReports(reportsRes.value);
-        if (overviewRes.status === "fulfilled") setOverviewStats(overviewRes.value);
-
-        if (withdrawalsRes.status === "fulfilled") {
-          const wData = withdrawalsRes.value;
-          const sum = wData
-            .filter(w => w.status === "Processed" || w.status === "Completed" || w.status === "Approved")
-            .reduce((acc, curr) => acc + curr.amount, 0);
-          setGlobalWithdrawals(sum);
-        }
-      } catch (err) {
-      } finally {
-        setLoading(false);
+    Promise.allSettled([
+      fundSummaryService.getSummary(),
+      batchService.getAll(),
+      api.get<{ status: number; data: any[] }>(API.TRANSACTIONS_RECENT),
+    ]).then(([sumRes, batchRes, txRes]) => {
+      if (sumRes.status === "fulfilled" && sumRes.value) setSummary(sumRes.value);
+      if (batchRes.status === "fulfilled") {
+        setOpenBatches((batchRes.value as Batch[]).filter((b) => b.is_open));
       }
-    }
-    load();
-  }, [refreshNonce]);
-
-  useEffect(() => {
-    const handler = () => setRefreshNonce((n) => n + 1);
-    window.addEventListener("dashboard_stats_dirty", handler as EventListener);
-    return () => window.removeEventListener("dashboard_stats_dirty", handler as EventListener);
+      if (txRes.status === "fulfilled") {
+        const payload = (txRes.value as any)?.data?.data ?? (txRes.value as any)?.data ?? [];
+        setTransactions(Array.isArray(payload) ? payload : []);
+      }
+    }).finally(() => setLoading(false));
   }, []);
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // ATOMIC BATCH SUMMATION: Global totals from backend
-  // ─────────────────────────────────────────────────────────────────────────
-  // PRIMARY:  overviewStats (from /api/v1/stats/overview) is the authoritative
-  //           global total (batch-scoped valuations).
-  // FALLBACK: sum of batch.total_capital from GET /batches (never override with
-  //           /batches/:id/history — that path is not batch-atomic for the same client code).
-  // ═══════════════════════════════════════════════════════════════════════════
-  const globalCalcs = calculateGlobalTotals(batches);
-  const totalAumFromBatchList = batches.reduce((sum, b) => sum + (b.total_capital ?? 0), 0);
+  // ── Derived data ──
+  const allClasses = useMemo<FundSummaryClass[]>(() => {
+    if (!summary) return [];
+    return summary.funds.flatMap((f) => f.classes);
+  }, [summary]);
 
-  // Total AUM: prefer backend stats endpoint (authoritative global aggregate)
-  const totalAUM = overviewStats?.total_aum ?? totalAumFromBatchList ?? globalCalcs.totalAUM;
+  const kesClasses = useMemo(() => allClasses.filter((c) => c.currency === "KES" && c.current_nav != null), [allClasses]);
+  const usdClasses = useMemo(() => allClasses.filter((c) => c.currency === "USD" && c.current_nav != null), [allClasses]);
 
-  // Total Investors: prefer backend stats (guaranteed distinct internal_client_code count)
-  const totalInvestors = overviewStats?.total_investors ?? globalCalcs.totalInvestors;
+  const totalKes = useMemo(() => summary?.funds.reduce((sum, f) => sum + (f.totals_by_currency?.KES ?? 0), 0) ?? 0, [summary]);
+  const totalUsd = useMemo(() => summary?.funds.reduce((sum, f) => sum + (f.totals_by_currency?.USD ?? 0), 0) ?? 0, [summary]);
 
-  const performancePct = globalCalcs.percentageGain;
-  const performanceTrend = performancePct > 0 ? "up" : performancePct < 0 ? "down" : "neutral";
-  const activeBatchCount = globalCalcs.activeBatchCount;
+  const activeInvestors = useMemo(() => {
+    const codes = new Set(transactions.map((t: any) => t.internal_client_code).filter(Boolean));
+    return codes.size || allClasses.reduce((s, c) => s + (c.total_shares != null ? 1 : 0), 0);
+  }, [transactions, allClasses]);
 
-  // ── Chart data from reports ──
-  const sorted = [...reports].sort(
-    (a, b) => new Date(a.epoch_end).getTime() - new Date(b.epoch_end).getTime()
-  );
-  const fundNames = [...new Set(sorted.map((r) => r.fund_name))];
-  const epochLabels = [...new Set(sorted.map((r) => {
-    const d = new Date(r.epoch_end);
-    return d.toLocaleDateString("en-GB", { month: "short", day: "2-digit", year: "numeric" });
-  }))];
-
-  // === FUND METRICS: Aggregate from batch holdings (batch-first approach) ===
-  const fundMetrics = aggregateFundMetrics(batches);
-  const fundNamesFromBatches = Object.keys(fundMetrics).sort();
-  
-  // ── Filter batches by status ──
-  const filteredBatches = statusFilter === "All" 
-    ? batches 
-    : batches.filter((b) => b.status === statusFilter);
-  const recentBatches = filteredBatches.slice(0, 5);
-
-  const getLatestBatchAUM = (batchId: number, fallback?: number) => {
-    const contrib = overviewStats?.batch_contributions?.[batchId];
-    if (contrib && typeof contrib.balance === "number") return contrib.balance;
-    return fallback ?? 0;
-  };
-
-  // ── Deposits/Withdrawals chart ── 
-  // Prefer the pre-computed flow_series from backend (accurate EpochLedger data + initial deposit injection)
-  const flowData = overviewStats?.flow_series && overviewStats.flow_series.length > 0
-    ? {
-        labels: overviewStats.flow_series.map((f: FlowPoint) => f.label),
-        deposits: overviewStats.flow_series.map((f: FlowPoint) => f.deposits),
-        withdrawals: overviewStats.flow_series.map((f: FlowPoint) => f.withdrawals),
-      }
-    : {
-        // Do not fallback to epoch-end labels for transaction charts.
-        // If backend flow_series is missing, show empty state instead of misleading dates.
-        labels: ["—"],
-        deposits: [0],
-        withdrawals: [0],
-      };
-  const flowByBatch = (overviewStats?.flow_by_batch && overviewStats.flow_by_batch.labels.length > 0)
-    ? overviewStats.flow_by_batch
-    : clientFlowByBatch;
-  const flowDatasets =
-    flowByBatch && flowByBatch.labels.length > 0 && flowByBatch.batches.length > 0
-      ? [
-          {
-            label: "Deposits",
-            // Sum all deposits from all batches per label index
-            data: flowByBatch.labels.map((_, i) => 
-               flowByBatch.batches.reduce((sum, b) => sum + (b.deposits[i] || 0), 0)
-            ),
-            backgroundColor: FLOW_COLORS.deposit,
-          },
-          {
-            label: "Withdrawals",
-            data: flowByBatch.withdrawals,
-            backgroundColor: FLOW_COLORS.withdrawal,
-          },
-        ]
-      : undefined;
-  const flowChartData = flowByBatch && flowByBatch.labels.length > 0
-    ? {
-        labels: flowByBatch.labels,
-        deposits: flowByBatch.labels.map(() => 0),
-        withdrawals: flowByBatch.withdrawals,
-      }
-    : flowData;
-
-  // ── Performance and AUM data ──
-  const perfData = {
-    labels: epochLabels.length > 0 ? epochLabels : ["—"],
-    funds: (fundNamesFromBatches.length > 0 ? fundNamesFromBatches : fundNames).map((name) => ({
-      name,
-      data: epochLabels.map(label => {
-        const report = sorted.find(r => {
-          const d = new Date(r.epoch_end);
-          const rLabel = d.toLocaleDateString("en-GB", { month: "short", day: "2-digit", year: "numeric" });
-          return r.fund_name === name && rLabel === label;
-        });
-        return report ? report.performance_rate_percent : null;
-      }),
-    })),
-  };
-
-  const aumData = overviewStats?.aum_data && overviewStats.aum_data.labels.length > 0
-    ? overviewStats.aum_data
-    : {
-        labels: epochLabels.length > 0 ? epochLabels : ["—"],
-        funds: (fundNamesFromBatches.length > 0 ? fundNamesFromBatches : fundNames).map((name) => {
-          const fundReports = sorted.filter((r) => r.fund_name === name);
-          const values = epochLabels.map(label => {
-            const report = fundReports.find(r => {
-              const d = new Date(r.epoch_end);
-              const rLabel = d.toLocaleDateString("en-GB", { month: "short", day: "2-digit", year: "numeric" });
-              return rLabel === label;
-            });
-            return report ? report.summary.total_closing_aum : 0;
-          });
-          
-          const growth = values.map((value, index) => {
-            if (index === 0) return 0;
-            const prev = values[index - 1] || 0;
-            return prev === 0 ? 0 : ((value - prev) / prev) * 100;
-          });
-          return { name, data: values, growth };
-        }),
-      };
-
-  // Fund allocation uses batch-based metrics when available
-  // IMPORTANT: Normalize fund values to match totalAUM (batch-first approach)
-  const latestPerFundRaw = (fundNamesFromBatches.length > 0 ? fundNamesFromBatches : fundNames).map((name) => {
-    if (fundMetrics[name]) {
-      return { name, value: fundMetrics[name].totalAUM };
-    }
-    const fr = sorted.filter((r) => r.fund_name === name);
-    return { name, value: fr[fr.length - 1]?.summary?.total_closing_aum || 0 };
-  });
-
-  // Normalize fund allocation to exactly match totalAUM
-  // This ensures the doughnut chart totals match the "Total AUM" KPI card
-  const fundAllocSum = latestPerFundRaw.reduce((s, x) => s + x.value, 0);
-  const latestPerFund = fundAllocSum > 0 && totalAUM > 0
-    ? latestPerFundRaw.map((f) => ({
-      ...f,
-      value: (f.value / fundAllocSum) * totalAUM, // Scale each fund proportionally to match totalAUM
-    }))
-    : latestPerFundRaw;
-
-  // ALWAYS use batch-first calculation for fund allocation
-  // This ensures the doughnut chart matches the "Total AUM" KPI card exactly
-  const allocData = {
-    funds: latestPerFund.length > 0 ? latestPerFund : [{ name: "No data", value: 0 }],
+  const sectionLabel: React.CSSProperties = {
+    fontSize: "10px", fontWeight: 600, letterSpacing: "0.1em",
+    textTransform: "uppercase", color: "var(--color-text-tertiary)",
+    marginBottom: "12px",
   };
 
   if (loading) {
     return (
-      <div className="d-flex align-items-center justify-content-center h-64">
-        <div
-          className="spinner-border"
-          style={{ color: "var(--color-brand-400)", width: "1.5rem", height: "1.5rem" }}
-          role="status"
-        >
-          <span className="visually-hidden">Loading...</span>
-        </div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "60vh" }}>
+        <div style={{ width: "24px", height: "24px", border: "2px solid rgba(255,255,255,0.08)", borderTopColor: "var(--color-brand-400)", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
       </div>
     );
   }
 
   return (
-    <div className="container-fluid px-0">
-      {/* Header */}
-      <div className="mb-4">
-        <h1 className="fw-bold" style={{ color: "var(--color-text-primary)", fontSize: "22px" }}>
-          Overview
+    <div style={{ maxWidth: "1400px" }}>
+
+      {/* ── Page header ── */}
+      <div style={{ marginBottom: "24px" }}>
+        <h1 style={{ fontSize: "22px", fontWeight: 700, color: "var(--color-text-primary)", letterSpacing: "-0.02em", marginBottom: "4px" }}>
+          Portfolio Overview
         </h1>
-        <p className="mb-0 mt-1" style={{ color: "var(--color-text-secondary)", fontSize: "13px" }}>
-          Portfolio summary across all active funds and batches
+        <p style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>
+          {summary?.as_of_date ? `NAV as of ${formatDate(summary.as_of_date)}` : "Live fund data"}
         </p>
       </div>
 
-      {/* KPI row — 5 equal cols ── */}
-      <div className="row g-3 mb-4">
-        <div className="col-lg col-sm-6">
-          <KPICard
-            label="Total AUM"
-            value={formatCurrency(totalAUM)}
-            valueSize="1.5rem"
-            trend={{ value: `${performancePct.toFixed(2)}%`, direction: performanceTrend as "up" | "down" | "neutral" }}
-            subtitle={`Latest committed: ${overviewStats?.latest_epoch_end ? new Date(overviewStats.latest_epoch_end).toLocaleDateString() : "—"}`}
-          />
-        </div>
-        <div className="col-lg col-sm-6">
-          <KPICard
-            label="Total withdrawals"
-            value={formatCurrency(globalWithdrawals)}
-            valueSize="1.5rem"
-            trend={{ value: "-", direction: "down" }}
-            subtitle="Approved/Processed/Completed"
-          />
-        </div>
-        <div className="col-lg col-sm-6">
-          <KPICard
-            label="Total investors"
-            value={String(totalInvestors)}
-            valueSize="1.5rem"
-            subtitle="clients"
-          />
-        </div>
-        <div className="col-lg col-sm-6">
-          <KPICard
-            label="Performance"
-            value={`${performancePct.toFixed(2)}%`}
-            valueSize="1.5rem"
-            trend={{ value: `${performancePct.toFixed(2)}%`, direction: performanceTrend as "up" | "down" | "neutral" }}
-            subtitle={`From ${overviewStats?.previous_epoch_end ? new Date(overviewStats.previous_epoch_end).toLocaleDateString() : "—"}`}
-          />
-        </div>
-        <div className="col-lg col-sm-6">
-          <KPICard
-            label="Active funds"
-            value={String(activeBatchCount)}
-            valueSize="1.5rem"
-            subtitle="Committed epochs"
-          />
-        </div>
-      </div>
+      {/* ── KPI strip ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "14px", marginBottom: "22px" }}>
 
-      {/* Charts 2×2 — two equal cols ── */}
-      <div className="row g-4 mb-4">
-        <div className="col-lg-6">
-          <ChartCard
-            title="Fund performance (%)"
-            subtitle="Monthly performance rate by fund"
-            legend={(fundNamesFromBatches.length > 0 ? fundNamesFromBatches : fundNames).map((n) => ({ label: n, color: getFundColor(n) }))}
-          >
-            <FundPerformanceLineChart data={perfData} height={300} />
-          </ChartCard>
-        </div>
-        <div className="col-lg-6">
-          <ChartCard
-            title="Portfolio AUM"
-            subtitle="Total assets under management over time"
-            legend={(fundNamesFromBatches.length > 0 ? fundNamesFromBatches : fundNames).map((n) => ({
-              label: `${n} ${formatCurrencyCompact(latestPerFund.find((f) => f.name === n)?.value || 0)}`,
-              color: getFundColor(n), // Use proper fund color instead of hardcoded #00005b
-            }))}
-          >
-            <PortfolioAUMChart data={aumData} height={300} />
-          </ChartCard>
-        </div>
-        <div className="col-lg-6">
-          <ChartCard
-            title="Deposits vs withdrawals"
-            subtitle="Inflows and outflows per epoch period"
-            legend={flowDatasets && flowDatasets.length > 0
-              ? flowDatasets.map((d) => ({ label: d.label, color: d.backgroundColor }))
-              : [
-                { label: "Deposits", color: FLOW_COLORS.deposit },
-                { label: "Withdrawals", color: FLOW_COLORS.withdrawal },
-              ]}
-          >
-            <DepositsWithdrawalsBarChart data={flowChartData} datasets={flowDatasets} height={300} />
-          </ChartCard>
-        </div>
-        <div className="col-lg-6">
-          <ChartCard
-            title="Fund allocation"
-            subtitle="Current capital distribution"
-            legend={latestPerFund.map((f) => {
-              const pct = totalAUM > 0 ? ((f.value / totalAUM) * 100).toFixed(1) : "0";
-              return { label: `${f.name} ${pct}%`, color: getFundColor(f.name) };
-            })}
-          >
-            <FundAllocationDoughnut data={allocData} />
-          </ChartCard>
-        </div>
-      </div>
-
-      {/* Recent batches table */}
-      <div className="card shadow overflow-hidden">
-        {/* Table header bar */}
-        <div
-          className="d-flex flex-wrap align-items-center justify-content-between gap-2 px-3 px-md-4 py-3"
-          style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
-        >
-          <h3 className="fw-bold mb-0" style={{ color: "var(--color-text-primary)", fontSize: "14px" }}>
-            Recent batches
-          </h3>
-          <div className="d-flex flex-wrap gap-2">
-            {(["All", "Active", "Pending", "Closed"] as const).map((status) => (
-              <button
-                key={status}
-                onClick={() => setStatusFilter(status)}
-                className="btn btn-sm"
-                style={{
-                  fontSize: "11px",
-                  padding: "3px 10px",
-                  borderRadius: "6px",
-                  border: statusFilter === status ? "1px solid var(--color-brand-400)" : "1px solid rgba(255,255,255,0.1)",
-                  background: statusFilter === status ? "var(--color-brand-50)" : "transparent",
-                  color: statusFilter === status ? "var(--color-brand-300)" : "var(--color-text-secondary)",
-                }}
-              >
-                {status}
-              </button>
-            ))}
+        {/* Total AUM KES */}
+        <div style={{ ...glass, padding: "18px 22px" }}>
+          <div style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-text-tertiary)", marginBottom: "8px" }}>
+            Total AUM <span style={{ color: "var(--color-kes)", marginLeft: "4px" }}>KES</span>
+          </div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: "var(--color-kes)", letterSpacing: "-0.02em" }}>
+            {totalKes > 0 ? totalKes.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
+          </div>
+          <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "4px" }}>
+            {kesClasses.length} active class{kesClasses.length !== 1 ? "es" : ""}
           </div>
         </div>
 
-        {/* Bootstrap table-dark */}
-        <div className="table-responsive">
-          <table className="table table-dark mb-0" style={{ background: "var(--color-bg-surface)" }}>
+        {/* Total AUM USD */}
+        <div style={{ ...glass, padding: "18px 22px" }}>
+          <div style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-text-tertiary)", marginBottom: "8px" }}>
+            Total AUM <span style={{ color: "var(--color-usd)", marginLeft: "4px" }}>USD</span>
+          </div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: "var(--color-usd)", letterSpacing: "-0.02em" }}>
+            {totalUsd > 0 ? `$ ${totalUsd.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+          </div>
+          <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "4px" }}>
+            {usdClasses.length} active class{usdClasses.length !== 1 ? "es" : ""}
+          </div>
+        </div>
+
+        {/* Active Investors */}
+        <div style={{ ...glass, padding: "18px 22px" }}>
+          <div style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-text-tertiary)", marginBottom: "8px" }}>
+            Active Investors
+          </div>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: "var(--color-text-primary)", letterSpacing: "-0.02em" }}>
+            {allClasses.filter((c) => c.total_shares != null && c.total_shares > 0).length > 0 ? activeInvestors || "—" : "—"}
+          </div>
+          <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "4px" }}>Across all funds</div>
+        </div>
+
+        {/* Open Batches */}
+        <div style={{ ...glass, padding: "18px 22px" }}>
+          <div style={{ fontSize: "10px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-text-tertiary)", marginBottom: "8px" }}>
+            Open Batches
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: "20px", fontWeight: 700, color: "var(--color-text-primary)" }}>
+              {openBatches.length}
+            </div>
+            {openBatches[0]?.auto_close_at && (
+              <CountdownPill closeAt={openBatches[0].auto_close_at!} />
+            )}
+          </div>
+          <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginTop: "4px" }}>
+            {openBatches.length > 0 ? "Accepting investors" : "No open batches"}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Middle row: Charts (60%) + Right cards (40%) ── */}
+      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 360px", gap: "16px", marginBottom: "22px", alignItems: "start" }}>
+
+        {/* Left: Side-by-side NAV charts */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px" }}>
+
+          {/* KES chart */}
+          <div style={{ ...glass, padding: "20px 24px" }}>
+            <NAVLineChart
+              classes={kesClasses}
+              currency="KES"
+              title="KES Classes — NAV / Share"
+              asOfDate={summary?.as_of_date}
+            />
+          </div>
+
+          {/* USD chart */}
+          <div style={{ ...glass, padding: "20px 24px" }}>
+            <NAVLineChart
+              classes={usdClasses}
+              currency="USD"
+              title="USD Classes — NAV / Share"
+              asOfDate={summary?.as_of_date}
+            />
+          </div>
+        </div>
+
+        {/* Right: Latest Valuation + Open Batches */}
+        <div style={{ display: "flex", flexDirection: "column", gap: "14px" }}>
+
+          {/* Latest Valuation card */}
+          <div style={{ ...glass, padding: "20px 22px" }}>
+            <p style={sectionLabel}>Latest Valuation</p>
+            {summary?.as_of_date && (
+              <div style={{ fontSize: "11px", color: "var(--color-text-tertiary)", marginBottom: "12px", fontFamily: "var(--font-mono)" }}>
+                as of {formatDate(summary.as_of_date)}
+              </div>
+            )}
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse" }}>
+                <thead>
+                  <tr>
+                    {["Class", "NAV / Share", "Total NAV", "Perf"].map((h) => (
+                      <th key={h} style={{ fontSize: "9px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-text-tertiary)", padding: "4px 6px", textAlign: "left", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                        {h}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {allClasses.filter((c) => c.current_nav != null).map((cls) => {
+                    const isKes = cls.currency === "KES";
+                    const perf = formatPerf(cls.performance_pct);
+                    const gain = (cls.performance_pct ?? 0) >= 0;
+                    return (
+                      <tr key={cls.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.03)" }}>
+                        <td style={{ padding: "7px 6px" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "5px" }}>
+                            <span style={{
+                              fontFamily: "var(--font-mono)", fontSize: "10px", fontWeight: 700,
+                              color: isKes ? "var(--color-kes)" : "var(--color-usd)",
+                            }}>
+                              {cls.class_code}
+                            </span>
+                          </div>
+                        </td>
+                        <td style={{ padding: "7px 6px", fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--color-text-primary)" }}>
+                          {formatNav(cls.current_nav)}
+                        </td>
+                        <td style={{ padding: "7px 6px", fontFamily: "var(--font-mono)", fontSize: "10px", color: "var(--color-text-secondary)" }}>
+                          {cls.total_nav != null ? (isKes ? "KES " : "$ ") + cls.total_nav.toLocaleString("en-US", { maximumFractionDigits: 0 }) : "—"}
+                        </td>
+                        <td style={{ padding: "7px 6px", fontFamily: "var(--font-mono)", fontSize: "11px", fontWeight: 600, color: gain ? "#22c55e" : "#EF4444" }}>
+                          {perf ?? "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {allClasses.filter((c) => c.current_nav != null).length === 0 && (
+                    <tr>
+                      <td colSpan={4} style={{ padding: "20px", textAlign: "center", color: "var(--color-text-tertiary)", fontSize: "12px" }}>
+                        No valuation data yet
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Open Batches card */}
+          <div style={{ ...glass, padding: "20px 22px" }}>
+            <p style={sectionLabel}>Open Batches</p>
+            {openBatches.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "20px 0", color: "var(--color-text-tertiary)", fontSize: "12px" }}>
+                No batches currently open
+              </div>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+                {openBatches.map((b) => (
+                  <div
+                    key={b.id}
+                    onClick={() => navigate(ROUTES.BATCH_DETAIL(b.id))}
+                    style={{
+                      padding: "10px 12px", borderRadius: "10px",
+                      background: "rgba(255,255,255,0.03)",
+                      border: "1px solid rgba(255,255,255,0.06)",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "4px" }}>
+                      <span style={{ fontFamily: "var(--font-mono)", fontSize: "11px", fontWeight: 600, color: "var(--color-text-primary)" }}>
+                        {b.batch_name}
+                      </span>
+                      {b.class_currency && <CurrBadge currency={b.class_currency as "KES" | "USD"} />}
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: "11px", color: "var(--color-text-tertiary)" }}>
+                        {b.investors_count} investor{b.investors_count !== 1 ? "s" : ""} · {b.total_capital?.toLocaleString("en-US", { maximumFractionDigits: 0 }) ?? "—"}
+                      </span>
+                      {b.auto_close_at && <CountdownPill closeAt={b.auto_close_at} />}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Recent Transactions ── */}
+      <div style={{ ...glass, padding: "0" }}>
+        <div style={{ padding: "16px 22px", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+          <p style={{ ...sectionLabel, marginBottom: 0 }}>Recent Transactions</p>
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
-                {["Batch name", "Certificate", "Stage", "Status", "Total AUM", "Investors", "Deployed", ""].map((h) => (
-                  <th key={h} style={{ textAlign: h === "Total AUM" || h === "Investors" ? "right" : "left" }}>
+                {["Date", "Investor", "Client Code", "Type", "Fund / Class", "Amount", "Currency", "Status"].map((h) => (
+                  <th key={h} style={{ fontSize: "9px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-text-tertiary)", padding: "10px 16px", textAlign: "left", background: "rgba(255,255,255,0.02)", whiteSpace: "nowrap" }}>
                     {h}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {recentBatches.map((b) => (
-                <tr key={b.id} onClick={() => navigate(ROUTES.BATCH_DETAIL(b.id))}>
-                  <td className="fw-bold" style={{ fontSize: "13px" }}>{b.batch_name}</td>
-                  <td style={{ fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)", fontSize: "12px" }}>
-                    {b.certificate_number || "—"}
-                  </td>
-                  <td><BatchStageStepper currentStage={b.stage} compact /></td>
-                  <td>
-                    {/* Show PENDING for undeployed batches, otherwise show actual status */}
-                    <StatusBadge status={!b.date_deployed && !b.is_active ? "Pending" : b.status} />
-                  </td>
-                  <td className="text-end" style={{ fontFamily: "var(--font-mono)", fontSize: "12px" }}>
-                    {formatCurrency(getLatestBatchAUM(b.id, b.total_capital ?? 0))}
-                  </td>
-                  <td className="text-end" style={{ fontFamily: "var(--font-mono)", fontSize: "12px" }}>
-                    {b.investors_count}
-                  </td>
-                  <td style={{ color: "var(--color-text-secondary)", fontSize: "12px" }}>
-                    {formatDate(b.date_deployed)}
-                  </td>
-                  <td><ChevronRight size={14} style={{ color: "var(--color-text-tertiary)" }} /></td>
-                </tr>
-              ))}
-              {recentBatches.length === 0 && (
+              {transactions.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="text-center py-5" style={{ color: "var(--color-text-tertiary)" }}>
-                    No batches yet. Create your first batch to get started.
+                  <td colSpan={8} style={{ padding: "32px", textAlign: "center", color: "var(--color-text-tertiary)", fontSize: "13px" }}>
+                    No recent transactions
                   </td>
                 </tr>
               )}
+              {transactions.map((tx: any) => (
+                <tr
+                  key={tx.id}
+                  onClick={() => tx.internal_client_code && navigate(ROUTES.INVESTOR_OVERVIEW(tx.internal_client_code))}
+                  style={{ borderBottom: "1px solid rgba(255,255,255,0.04)", cursor: "pointer", transition: "background 0.12s" }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(59,130,246,0.04)")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                >
+                  <td style={{ padding: "10px 16px", fontSize: "12px", color: "var(--color-text-secondary)", whiteSpace: "nowrap" }}>
+                    {formatDate(tx.date)}
+                  </td>
+                  <td style={{ padding: "10px 16px", fontSize: "12px", color: "var(--color-text-primary)", fontWeight: 500 }}>
+                    {tx.investor_name}
+                  </td>
+                  <td style={{ padding: "10px 16px", fontFamily: "var(--font-mono)", fontSize: "11px", color: "var(--color-text-tertiary)" }}>
+                    {tx.internal_client_code ?? "—"}
+                  </td>
+                  <td style={{ padding: "10px 16px" }}>
+                    <TypeBadge type={tx.type as TxType} />
+                  </td>
+                  <td style={{ padding: "10px 16px", fontSize: "12px", color: "var(--color-text-secondary)" }}>
+                    {tx.fund_name}
+                    {tx.class_code && (
+                      <span style={{
+                        marginLeft: "6px", fontFamily: "var(--font-mono)", fontSize: "10px", fontWeight: 700,
+                        color: tx.currency === "KES" ? "var(--color-kes)" : "var(--color-usd)",
+                      }}>
+                        {tx.class_code}
+                      </span>
+                    )}
+                  </td>
+                  <td style={{ padding: "10px 16px", fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--color-text-primary)", whiteSpace: "nowrap" }}>
+                    {tx.currency === "KES" ? "KES " : "$ "}
+                    {tx.amount != null ? tx.amount.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : "—"}
+                  </td>
+                  <td style={{ padding: "10px 16px" }}>
+                    <CurrBadge currency={tx.currency as "KES" | "USD"} />
+                  </td>
+                  <td style={{ padding: "10px 16px" }}>
+                    <StatusDot status={tx.status} />
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       </div>
+
+      <style>{`
+        @keyframes spin { to { transform: rotate(360deg); } }
+      `}</style>
     </div>
   );
 }
+

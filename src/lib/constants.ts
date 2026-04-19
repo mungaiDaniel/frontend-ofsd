@@ -27,6 +27,9 @@ export const STAGE_DESCRIPTIONS: Record<BatchStage, string> = {
 // ── Routes ──
 
 export const ROUTES = {
+  // Landing
+  LANDING: "/",
+
   // Auth
   LOGIN: "/login",
   REGISTER: "/register",
@@ -42,6 +45,7 @@ export const ROUTES = {
 
   // Funds
   FUNDS: "/funds",
+  FUND_MANAGE: "/funds/manage",
   FUND_DETAIL: (id: number | string) => `/funds/${id}`,
 
   // Valuations
@@ -59,6 +63,7 @@ export const ROUTES = {
   // Users
   USERS: "/users",
   INVESTORS: "/investors",
+  INVESTOR_ADD: "/investors/add",
   INVESTOR_OVERVIEW: (clientCode: string) => `/investors/${encodeURIComponent(clientCode)}`,
   INVESTOR_STATEMENT: (clientCode: string) => `/investors/${encodeURIComponent(clientCode)}/statement`,
 
@@ -67,6 +72,9 @@ export const ROUTES = {
 
   // Settings
   SETTINGS: "/settings",
+
+  // Easter egg
+  CREDITS: "/credits",
 } as const;
 
 // ── API Paths ──
@@ -94,6 +102,9 @@ export const API = {
 
   // Investments
   INVESTMENTS: "/investments",
+  INVESTORS_NEW: "/investors",
+  INVESTORS_EXISTING: "/investors/existing",
+  INVESTOR_LOOKUP: (code: string) => `/investors/${encodeURIComponent(code)}`,
   INVESTOR_DIRECTORY: "/investors",
   INVESTOR_EMAIL_LOGS: (clientCode: string) => `/investors/${encodeURIComponent(clientCode)}/email-logs`,
 
@@ -103,17 +114,23 @@ export const API = {
 
   // Funds
   FUNDS: "/funds",
+  FUNDS_SUMMARY: "/funds/summary",
+  FUND_CLASSES: (id: number) => `/funds/${id}/classes`,
 
   // Performance
   BATCH_PERFORMANCE: (batchId: number) => `/batches/${batchId}/performance`,
   BATCH_PRO_RATA: (batchId: number) => `/batches/${batchId}/calculate-pro-rata`,
   PERFORMANCE_UPLOAD_EXCEL: "/performance/upload-excel",
 
-  // Valuation
+  // Valuation (old epoch-based — kept for backward compat)
   VALUATION_EPOCH: "/valuation/epoch",
   VALUATION_CONFIRM: "/valuation/confirm",
   VALUATION_DRY_RUN: "/valuation/dry-run",
   VALUATION_FUNDS: "/valuation/funds",
+
+  // Valuation (new NAV-per-share system)
+  VALUATION_NAV: "/valuation/nav",
+  VALUATION_PREVIEW: "/valuation/preview",
 
   // Reports
   REPORTS: "/reports",
@@ -130,8 +147,18 @@ export const API = {
   BATCH_SUMMARY_EXCEL: (id: number) => `/reports/batch/${id}/summary-excel`,
   BATCH_RECONCILIATION: (id: number) => `/reports/batch/${id}/reconciliation`,
 
+  // Reports v2 — Generate & Send (new — to be confirmed with Daniel)
+  REPORTS_ELIGIBLE_INVESTORS: "/reports/eligible-investors",
+  REPORTS_GENERATE: "/reports/generate",
+  REPORTS_RUNS: "/reports/runs",
+  REPORTS_RUN_BY_ID: (id: number) => `/reports/runs/${id}`,
+  REPORTS_PREVIEW: "/reports/preview",
+
   // Overview statistics
   OVERVIEW_STATS: "/stats/overview",
+
+  // Transactions
+  TRANSACTIONS_RECENT: "/transactions/recent",
 
   // Audit (backend dependency — endpoint may not exist yet)
   AUDIT_LOGS: "/audit-logs",
@@ -146,6 +173,8 @@ export const FUND_COLORS: Record<string, string> = {
   atium: "#3DBB78",
   default: "#D4940B",
 };
+
+export const IDLE_TIMEOUT_MS = 10 * 60 * 1000;
 
 export const CHART_COLORS = {
   deposit: "#3DBB78",

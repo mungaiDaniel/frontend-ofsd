@@ -92,6 +92,47 @@ export function formatDateCompact(dateStr: string | null | undefined): string {
 }
 
 /**
+ * Format NAV per share with 4 decimal places: "1,389.5737"
+ */
+export function formatNav(value: number | null | undefined): string {
+  if (value == null) return "—";
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 4,
+    maximumFractionDigits: 4,
+  }).format(value);
+}
+
+/**
+ * Format currency with explicit currency code:
+ *   formatCurrencyFull(1072636.69, "KES") → "KES 1,072,636.69"
+ *   formatCurrencyFull(219074.79, "USD")  → "$219,074.79"
+ */
+export function formatCurrencyFull(value: number | null | undefined, currency: "KES" | "USD"): string {
+  if (value == null) return currency === "KES" ? "KES —" : "$—";
+  if (currency === "KES") {
+    return `KES ${new Intl.NumberFormat("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(value)}`;
+  }
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(value);
+}
+
+/**
+ * Format performance percent with mandatory sign: "+4.52%" or "-1.20%"
+ */
+export function formatPercentSigned(value: number | null | undefined): string {
+  if (value == null) return "—";
+  const sign = value >= 0 ? "+" : "";
+  return `${sign}${value.toFixed(2)}%`;
+}
+
+/**
  * Capitalize first letter of each word
  */
 export function titleCase(str: string): string {

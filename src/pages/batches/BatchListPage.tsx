@@ -1,299 +1,311 @@
 import { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
-import { KPICard } from "@/components/data/KPICard";
-import { StatusBadge } from "@/components/data/StatusBadge";
-import { BatchStageStepper } from "@/components/data/BatchStageStepper";
 import { batchService } from "@/services/batchService";
-import { investmentService } from "@/services/investmentService";
-import { dashboardService, type OverviewStats } from "@/services/dashboardService";
-import { formatCurrency, formatCurrencyCompact, formatDate } from "@/lib/utils";
+import { formatDate } from "@/lib/utils";
 import { ROUTES } from "@/lib/constants";
-import type { Batch, BatchStatus } from "@/lib/types";
-import { Plus, Search, ChevronRight, ChevronUp, ChevronDown } from "lucide-react";
+import type { Batch } from "@/lib/types";
+import { Plus, Search } from "lucide-react";
+import { BatchStageStepper } from "@/components/data/BatchStageStepper";
 
-type SortKey = "batch_name" | "total_capital" | "investors_count" | "date_deployed" | "stage";
-type SortDir = "asc" | "desc";
+type Tab = "Open" | "Closed" | "Transferred" | "Deployed" | "All";
+const TABS: Tab[] = ["Open", "Deployed", "Closed", "Transferred", "All"];
 
-const FILTERS: ("All" | BatchStatus)[] = ["All", "Active", "Pending", "Closed"];
+// ── Helpers ──
+
+function msUntil(iso: string) {
+  const diff = new Date(iso).getTime() - Date.now();
+  if (diff <= 0) return null;
+  const h = Math.floor(diff / 3_600_000);
+  return { days: Math.floor(h / 24), hours: h % 24 };
+}
+
+function CurrBadge({ currency }: { currency?: "KES" | "USD" | null }) {
+  if (!currency) return null;
+  const isKes = currency === "KES";
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center",
+      padding: "2px 7px", borderRadius: "5px",
+      fontSize: "9px", fontWeight: 700, letterSpacing: "0.06em",
+      fontFamily: "var(--font-mono)",
+      background: isKes ? "var(--color-kes-bg)" : "var(--color-usd-bg)",
+      color: isKes ? "var(--color-kes)" : "var(--color-usd)",
+      border: isKes ? "1px solid var(--color-kes-border)" : "1px solid var(--color-usd-border)",
+    }}>
+      {currency}
+    </span>
+  );
+}
+
+function ClassBadge({ code, currency }: { code?: string | null; currency?: "KES" | "USD" | null }) {
+  if (!code) return null;
+  const isKes = currency === "KES";
+  return (
+    <span style={{
+      fontFamily: "var(--font-mono)", fontSize: "10px", fontWeight: 700,
+      color: isKes ? "var(--color-kes)" : "var(--color-usd)",
+    }}>
+      {code}
+    </span>
+  );
+}
+
+function StageBadge({ stage }: { stage: number }) {
+  const labels: Record<number, string> = { 1: "Deposited", 2: "Transferred", 3: "Deployed", 4: "Active" };
+  const colors: Record<number, { bg: string; color: string }> = {
+    1: { bg: "rgba(59,130,246,0.1)",  color: "#60A5FA" },
+    2: { bg: "rgba(245,158,11,0.1)",  color: "#F59E0B" },
+    3: { bg: "rgba(168,85,247,0.1)",  color: "#C084FC" },
+    4: { bg: "rgba(34,197,94,0.1)",   color: "#22c55e" },
+  };
+  const s = colors[stage] ?? { bg: "rgba(59,130,246,0.1)", color: "#60A5FA" };
+  return (
+    <span style={{
+      display: "inline-block", padding: "2px 8px", borderRadius: "100px",
+      fontSize: "9px", fontWeight: 600, letterSpacing: "0.05em",
+      background: s.bg, color: s.color,
+    }}>
+      {labels[stage] ?? "Unknown"}
+    </span>
+  );
+}
+
+function CountdownPill({ closeAt }: { closeAt: string }) {
+  const t = msUntil(closeAt);
+  if (!t) return <span style={{ fontSize: "10px", color: "#475569" }}>Closing soon</span>;
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: "4px",
+      padding: "2px 8px", borderRadius: "100px",
+      background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.25)",
+      fontSize: "10px", fontWeight: 600, color: "#F59E0B",
+    }}>
+      Closes in {t.days > 0 ? `${t.days}d ${t.hours}h` : `${t.hours}h`}
+    </span>
+  );
+}
+
+// ── Glass card style ──
+const glass: React.CSSProperties = {
+  background: "rgba(16,24,45,0.72)",
+  backdropFilter: "blur(20px) saturate(150%)",
+  WebkitBackdropFilter: "blur(20px) saturate(150%)",
+  border: "1px solid rgba(255,255,255,0.07)",
+  borderRadius: "16px",
+  boxShadow: "0 4px 24px rgba(0,0,0,0.25)",
+};
 
 export default function BatchListPage() {
   const navigate = useNavigate();
   const [batches, setBatches] = useState<Batch[]>([]);
-  const [overviewStats, setOverviewStats] = useState<OverviewStats | null>(null);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState<"All" | BatchStatus>("All");
-  const [uniqueInvestors, setUniqueInvestors] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<Tab>("Open");
   const [search, setSearch] = useState("");
-  const [sortKey, setSortKey] = useState<SortKey>("batch_name");
-  const [sortDir, setSortDir] = useState<SortDir>("asc");
 
   useEffect(() => {
-    Promise.allSettled([
-      batchService.getAll(),
-      investmentService.getInvestorDirectory(),
-      dashboardService.getOverviewStats(),
-    ])
-      .then(([batchRes, investorRes, overviewRes]) => {
-        if (batchRes.status === "fulfilled") setBatches(batchRes.value);
-        if (investorRes.status === "fulfilled") {
-          const payload = investorRes.value as any;
-          if (payload && typeof payload.count === "number") {
-            setUniqueInvestors(payload.count);
-          } else if (payload && Array.isArray(payload.data)) {
-            setUniqueInvestors(payload.data.length);
-          }
-        }
-        if (overviewRes.status === "fulfilled") setOverviewStats(overviewRes.value);
-      })
+    batchService.getAll()
+      .then(setBatches)
+      .catch(() => setBatches([]))
       .finally(() => setLoading(false));
   }, []);
 
-  /** Authoritative per-batch AUM from GET /batches (batch-scoped; do not override with /history). */
-  const getLatestBatchAUM = (batch: Batch) => {
-    const bid = batch.id;
-    const contrib = overviewStats?.batch_contributions?.[bid];
-    if (contrib && typeof contrib.balance === "number") return contrib.balance;
-    return batch.total_capital ?? 0;
-  };
-
   const filtered = useMemo(() => {
     let r = batches;
-    if (filter !== "All") r = r.filter((b) => b.status === filter);
+    if (activeTab === "Open")         r = r.filter((b) => b.is_open);
+    else if (activeTab === "Closed")  r = r.filter((b) => !b.is_open && b.status === "Closed");
+    else if (activeTab === "Transferred") r = r.filter((b) => b.stage >= 2 && b.stage < 3);
+    else if (activeTab === "Deployed") r = r.filter((b) => b.stage >= 3);
+
     if (search.trim()) {
       const q = search.toLowerCase();
-      r = r.filter(
-        (b) =>
-          b.batch_name.toLowerCase().includes(q) ||
-          (b.certificate_number || "").toLowerCase().includes(q)
+      r = r.filter((b) =>
+        b.batch_name.toLowerCase().includes(q) ||
+        (b.class_code ?? "").toLowerCase().includes(q) ||
+        (b.certificate_number ?? "").toLowerCase().includes(q)
       );
     }
-    return [...r].sort((a, b) => {
-      const av = a[sortKey] ?? "";
-      const bv = b[sortKey] ?? "";
-      if (typeof av === "number" && typeof bv === "number")
-        return sortDir === "asc" ? av - bv : bv - av;
-      return sortDir === "asc"
-        ? String(av).localeCompare(String(bv))
-        : String(bv).localeCompare(String(av));
-    });
-  }, [batches, filter, search, sortKey, sortDir]);
+    return r;
+  }, [batches, activeTab, search]);
 
-  const totalAUM   = batches.reduce((s, b) => s + getLatestBatchAUM(b), 0);
-  const activeCt   = batches.filter((b) => b.status === "Active").length;
-  const pendingCt  = batches.filter((b) => b.status === "Pending").length;
-  const investorCt = batches.reduce((s, b) => s + (b.investors_count || 0), 0);
-  const displayedInvestorCt = uniqueInvestors !== null ? uniqueInvestors : investorCt;
-
-  function toggleSort(key: SortKey) {
-    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(key); setSortDir("asc"); }
-  }
-
-  const SortIcon = ({ col }: { col: SortKey }) =>
-    sortKey !== col ? null : sortDir === "asc" ? <ChevronUp size={11} /> : <ChevronDown size={11} />;
-
-  const totalFiltered = filtered.reduce((s, b) => s + getLatestBatchAUM(b), 0);
+  const openCount = batches.filter((b) => b.is_open).length;
 
   return (
-    <div className="container-fluid px-0">
-
-      {/* ── Page Header ── */}
+    <div>
+      {/* ── Header ── */}
       <div className="page-header-row mb-4">
         <div>
-          <h1 className="fw-bold mb-1" style={{ fontSize: "22px", color: "var(--color-text-primary)" }}>
+          <h1 style={{ fontSize: "22px", fontWeight: 700, color: "var(--color-text-primary)", letterSpacing: "-0.02em", marginBottom: "4px" }}>
             Batches
           </h1>
-          <p className="mb-0" style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>
-            Manage investment batches and track deployment stages
+          <p style={{ fontSize: "13px", color: "var(--color-text-secondary)" }}>
+            Weekly investment groups sent to AXYS
           </p>
         </div>
         <button
           onClick={() => navigate(ROUTES.BATCH_CREATE)}
-          className="btn btn-primary btn-sm rounded-pill d-flex align-items-center gap-2 fw-bold"
-          style={{ padding: "8px 18px" }}
+          style={{
+            display: "flex", alignItems: "center", gap: "6px",
+            padding: "8px 18px", borderRadius: "8px",
+            background: "#1A45FF", border: "none",
+            color: "#fff", fontSize: "12px", fontWeight: 500,
+            cursor: "pointer", boxShadow: "0 0 16px rgba(26,69,255,0.3)",
+          }}
         >
           <Plus size={14} /> New batch
         </button>
       </div>
 
-      {/* ── KPI Row ── */}
-      <div className="row g-3 mb-4">
-        <div className="col-lg-3 col-sm-6">
-          <KPICard label="Total AUM" value={formatCurrencyCompact(totalAUM)} />
+      {/* ── Tabs + Search ── */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "12px", marginBottom: "20px" }}>
+        <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+          {TABS.map((tab) => {
+            const active = tab === activeTab;
+            return (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                style={{
+                  padding: "5px 14px", borderRadius: "100px",
+                  fontSize: "11px", fontWeight: 600,
+                  border: active ? "1px solid rgba(59,130,246,0.5)" : "1px solid rgba(255,255,255,0.08)",
+                  background: active ? "rgba(59,130,246,0.12)" : "transparent",
+                  color: active ? "#60A5FA" : "var(--color-text-secondary)",
+                  cursor: "pointer", transition: "all 0.15s",
+                  display: "flex", alignItems: "center", gap: "5px",
+                }}
+              >
+                {tab}
+                {tab === "Open" && openCount > 0 && (
+                  <span style={{ fontSize: "9px", padding: "1px 5px", borderRadius: "100px", background: "rgba(245,158,11,0.15)", color: "#F59E0B" }}>
+                    {openCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
-        <div className="col-lg-3 col-sm-6">
-          <KPICard label="Active" value={String(activeCt)} />
-        </div>
-        <div className="col-lg-3 col-sm-6">
-          <KPICard label="Pending" value={String(pendingCt)} />
-        </div>
-        <div className="col-lg-3 col-sm-6">
-          <KPICard label="Investors" value={displayedInvestorCt.toLocaleString()} subtitle={uniqueInvestors !== null ? "Distinct" : "Sum by batch (fallback)"} />
+        <div style={{ position: "relative" }}>
+          <Search size={12} style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", color: "var(--color-text-tertiary)", pointerEvents: "none" }} />
+          <input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search batches…"
+            style={{
+              background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)",
+              borderRadius: "8px", paddingLeft: "30px", paddingRight: "12px",
+              paddingTop: "6px", paddingBottom: "6px",
+              fontSize: "12px", color: "var(--color-text-primary)", width: "220px",
+              outline: "none",
+            }}
+          />
         </div>
       </div>
 
-      {/* ── Table Card ── */}
-      <div className="card shadow">
+      {/* ── Cards grid ── */}
+      {loading ? (
+        <div style={{ display: "flex", justifyContent: "center", padding: "60px 0" }}>
+          <div style={{ width: "24px", height: "24px", border: "2px solid rgba(255,255,255,0.08)", borderTopColor: "#3B82F6", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+        </div>
+      ) : filtered.length === 0 ? (
+        <div style={{ ...glass, padding: "48px", textAlign: "center", color: "var(--color-text-tertiary)", fontSize: "13px" }}>
+          {search ? "No batches match your search." : "No batches in this category."}
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(380px, 1fr))", gap: "14px" }}>
+          {filtered.map((b) => (
+            <BatchCard key={b.id} batch={b} onClick={() => navigate(ROUTES.BATCH_DETAIL(b.id))} />
+          ))}
+        </div>
+      )}
 
-        {/* Filter + Search bar */}
-        <div
-          className="d-flex flex-wrap align-items-center justify-content-between gap-3 px-3 px-md-4 py-3"
-          style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}
-        >
-          {/* Status pills */}
-          <div className="d-flex flex-wrap gap-2">
-            {FILTERS.map((f) => (
-              <button
-                key={f}
-                onClick={() => setFilter(f)}
-                className="btn btn-sm"
-                style={{
-                  fontSize: "11px",
-                  fontWeight: 600,
-                  padding: "4px 14px",
-                  borderRadius: "20px",
-                  border: filter === f
-                    ? "1px solid var(--color-brand-400)"
-                    : "1px solid rgba(255,255,255,0.1)",
-                  background: filter === f ? "var(--color-brand-50)" : "transparent",
-                  color: filter === f ? "var(--color-brand-300)" : "var(--color-text-secondary)",
-                  transition: "all 0.15s",
-                }}
-              >
-                {f}
-              </button>
-            ))}
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+    </div>
+  );
+}
+
+// ── BatchCard ──
+function BatchCard({ batch: b, onClick }: { batch: Batch; onClick: () => void }) {
+  const hasClass = !!b.class_code;
+  const fundName = b.funds?.[0]?.fund_name ?? "—";
+
+  return (
+    <div
+      onClick={onClick}
+      style={{
+        ...glass,
+        padding: "18px 20px",
+        cursor: "pointer",
+        transition: "border-color 0.15s, box-shadow 0.15s",
+      }}
+      onMouseEnter={(e) => {
+        (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(59,130,246,0.25)";
+        (e.currentTarget as HTMLDivElement).style.boxShadow = "0 8px 32px rgba(0,0,0,0.35)";
+      }}
+      onMouseLeave={(e) => {
+        (e.currentTarget as HTMLDivElement).style.borderColor = "rgba(255,255,255,0.07)";
+        (e.currentTarget as HTMLDivElement).style.boxShadow = "0 4px 24px rgba(0,0,0,0.25)";
+      }}
+    >
+      {/* Top row: name + badges */}
+      <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", marginBottom: "12px" }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontFamily: "var(--font-mono)", fontSize: "12px", fontWeight: 700, color: "var(--color-text-primary)", marginBottom: "4px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {b.batch_name}
           </div>
-
-          {/* Search */}
-          <div className="position-relative w-100 ms-md-auto" style={{ minWidth: 0, maxWidth: "min(100%, 280px)" }}>
-            <Search
-              size={13}
-              style={{
-                position: "absolute",
-                left: "12px",
-                top: "50%",
-                transform: "translateY(-50%)",
-                color: "var(--color-text-tertiary)",
-                pointerEvents: "none",
-              }}
-            />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search batches..."
-              className="form-control form-control-sm w-100"
-              style={{ paddingLeft: "32px", maxWidth: "min(100%, 260px)", fontSize: "12px" }}
-            />
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+            <span style={{ fontSize: "11px", color: "var(--color-text-tertiary)" }}>{fundName}</span>
+            {hasClass && (
+              <>
+                <span style={{ color: "rgba(255,255,255,0.2)", fontSize: "10px" }}>›</span>
+                <ClassBadge code={b.class_code} currency={b.class_currency} />
+                <span style={{ color: "rgba(255,255,255,0.2)", fontSize: "10px" }}>›</span>
+                <CurrBadge currency={b.class_currency} />
+              </>
+            )}
           </div>
         </div>
+        <StageBadge stage={b.stage} />
+      </div>
 
-        {/* Table */}
-        {loading ? (
-          <div className="d-flex align-items-center justify-content-center py-5">
-            <div
-              className="spinner-border spinner-border-sm"
-              style={{ color: "var(--color-brand-400)" }}
-              role="status"
-            >
-              <span className="visually-hidden">Loading...</span>
+      {/* Stage stepper */}
+      <div style={{ marginBottom: "12px" }}>
+        <BatchStageStepper currentStage={b.stage} compact />
+      </div>
+
+      {/* Stats row */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", borderTop: "1px solid rgba(255,255,255,0.05)", paddingTop: "10px" }}>
+        <div style={{ display: "flex", gap: "18px" }}>
+          <div>
+            <div style={{ fontSize: "9px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>Investors</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: "13px", fontWeight: 600, color: "var(--color-text-primary)", marginTop: "2px" }}>{b.investors_count}</div>
+          </div>
+          <div>
+            <div style={{ fontSize: "9px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>Deposited</div>
+            <div style={{ fontFamily: "var(--font-mono)", fontSize: "12px", color: "var(--color-text-secondary)", marginTop: "2px" }}>
+              {b.total_capital != null
+                ? (b.class_currency === "KES" ? "KES " : b.class_currency === "USD" ? "$ " : "") + b.total_capital.toLocaleString("en-US", { maximumFractionDigits: 0 })
+                : "—"}
             </div>
           </div>
-        ) : (
-          <div className="table-responsive">
-            <table className="table table-dark mb-0" style={{ background: "var(--color-bg-surface)" }}>
-              <thead>
-                <tr>
-                  {([
-                    { key: "batch_name" as SortKey,       label: "Batch Name",  align: "left"  },
-                    { key: null,                           label: "Type",        align: "left"  },
-                    { key: null,                           label: "Certificate", align: "left"  },
-                    { key: "stage" as SortKey,             label: "Stage",       align: "left"  },
-                    { key: null,                           label: "Status",      align: "left"  },
-                    { key: "total_capital" as SortKey,     label: "Total AUM",   align: "right" },
-                    { key: "investors_count" as SortKey,   label: "Investors",   align: "right" },
-                    { key: "date_deployed" as SortKey,     label: "Deployed",    align: "left"  },
-                    { key: null,                           label: "",            align: "left"  },
-                  ] as const).map((col) => (
-                    <th
-                      key={col.label}
-                      style={{
-                        textAlign: col.align as "left" | "right",
-                        cursor: col.key ? "pointer" : "default",
-                        userSelect: "none",
-                      }}
-                      onClick={() => col.key && toggleSort(col.key)}
-                    >
-                      <span className="d-inline-flex align-items-center gap-1">
-                        {col.label}
-                        {col.key && <SortIcon col={col.key} />}
-                      </span>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((b) => (
-                  <tr
-                    key={b.id}
-                    style={{ cursor: "pointer" }}
-                    onClick={() => navigate(ROUTES.BATCH_DETAIL(b.id))}
-                  >
-                    <td className="fw-bold" style={{ fontSize: "13px" }}>{b.batch_name}</td>
-                    <td style={{ fontSize: "12px", color: "var(--color-text-secondary)" }}>
-                      <span style={{
-                        display: "inline-block",
-                        padding: "3px 8px",
-                        borderRadius: "3px",
-                        background: (b as any).batch_type === "Carried Forward" ? "rgba(70,130,180,0.2)" : "rgba(135,206,235,0.2)",
-                        color: (b as any).batch_type === "Carried Forward" ? "#87CEEB" : "#B0E0E6",
-                        fontSize: "11px",
-                        fontWeight: 500
-                      }}>
-                        {(b as any).batch_type || "Standard"}
-                      </span>
-                    </td>
-                    <td style={{ fontFamily: "var(--font-mono)", color: "var(--color-text-secondary)", fontSize: "12px" }}>
-                      {b.certificate_number || "—"}
-                    </td>
-                    <td><BatchStageStepper currentStage={b.stage} compact /></td>
-                    <td><StatusBadge status={b.status} /></td>
-                    <td className="text-end" style={{ fontFamily: "var(--font-mono)", fontSize: "12px" }}>
-                      {formatCurrency(getLatestBatchAUM(b))}
-                    </td>
-                    <td className="text-end" style={{ fontFamily: "var(--font-mono)", fontSize: "12px" }}>
-                      {b.investors_count}
-                    </td>
-                    <td style={{ color: "var(--color-text-secondary)", fontSize: "12px" }}>
-                      {b.date_deployed ? formatDate(b.date_deployed) : "Awaiting Deployment"}
-                    </td>
-                    <td><ChevronRight size={14} style={{ color: "var(--color-text-tertiary)" }} /></td>
-                  </tr>
-                ))}
-                {filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={9} className="text-center py-5" style={{ color: "var(--color-text-tertiary)" }}>
-                      No batches match your filters.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
-        )}
-
-        {/* Footer */}
-        <div
-          className="d-flex align-items-center justify-content-between px-4 py-2"
-          style={{
-            borderTop: "1px solid rgba(255,255,255,0.06)",
-            fontSize: "11px",
-            color: "var(--color-text-tertiary)",
-          }}
-        >
-          <span>{filtered.length} batch{filtered.length !== 1 ? "es" : ""}</span>
-          <span>Total: {formatCurrency(totalFiltered)}</span>
+          {b.deployment_date_actual && (
+            <div>
+              <div style={{ fontSize: "9px", fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", color: "var(--color-text-tertiary)" }}>Deployed</div>
+              <div style={{ fontSize: "11px", color: "var(--color-text-secondary)", marginTop: "2px" }}>{formatDate(b.deployment_date_actual)}</div>
+            </div>
+          )}
         </div>
+        {/* Right: open countdown or closed pill */}
+        {b.is_open && b.auto_close_at ? (
+          <CountdownPill closeAt={b.auto_close_at} />
+        ) : (
+          <span style={{
+            fontSize: "9px", fontWeight: 600, padding: "2px 8px", borderRadius: "100px",
+            background: "rgba(255,255,255,0.04)", color: "var(--color-text-tertiary)",
+            border: "1px solid rgba(255,255,255,0.07)",
+          }}>
+            {b.status}
+          </span>
+        )}
       </div>
     </div>
   );

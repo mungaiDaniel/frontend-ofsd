@@ -1,6 +1,6 @@
 import api from "./api";
 import { API } from "@/lib/constants";
-import type { ApiResponse, ReportSummary, ReportDetail } from "@/lib/types";
+import type { ApiResponse, ReportSummary, ReportDetail, EligibleInvestor, ReportRun, ReportRunDetail } from "@/lib/types";
 
 export const reportService = {
   async getAll(fundId?: number): Promise<ReportSummary[]> {
@@ -149,6 +149,31 @@ export const reportService = {
   async verifyHashChain(investorCode: string, fundName: string): Promise<ApiResponse> {
     const res = await api.get<ApiResponse>(API.VERIFY_HASH_CHAIN(investorCode, fundName));
     return res.data;
+  },
+
+  // ── Reports v2: Generate & Send ──
+
+  async getEligibleInvestors(params: { period: string; fund_id?: number; share_class_id?: number }): Promise<EligibleInvestor[]> {
+    const q = new URLSearchParams({ period: params.period });
+    if (params.fund_id) q.set("fund_id", String(params.fund_id));
+    if (params.share_class_id) q.set("share_class_id", String(params.share_class_id));
+    const res = await api.get<ApiResponse<EligibleInvestor[]>>(`${API.REPORTS_ELIGIBLE_INVESTORS}?${q}`);
+    return res.data.data ?? [];
+  },
+
+  async generateReports(body: { period: string; share_class_id?: number; investor_ids: number[]; send_email: boolean }): Promise<{ report_run_id: number }> {
+    const res = await api.post<ApiResponse<{ report_run_id: number }>>(API.REPORTS_GENERATE, body);
+    return res.data.data as { report_run_id: number };
+  },
+
+  async getReportRuns(): Promise<ReportRun[]> {
+    const res = await api.get<ApiResponse<ReportRun[]>>(API.REPORTS_RUNS);
+    return res.data.data ?? [];
+  },
+
+  async getReportRunById(id: number): Promise<ReportRunDetail> {
+    const res = await api.get<ApiResponse<ReportRunDetail>>(API.REPORTS_RUN_BY_ID(id));
+    return res.data.data as ReportRunDetail;
   },
 
   /** Downloads batch summary Excel with Authorization headers via Axios */

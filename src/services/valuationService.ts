@@ -1,6 +1,6 @@
 import api from "./api";
 import { API } from "@/lib/constants";
-import type { ApiResponse, CreateValuationRequest, CoreFund } from "@/lib/types";
+import type { ApiResponse, CreateValuationRequest, CoreFund, ValuationRequest, ValuationResponse } from "@/lib/types";
 
 export const valuationService = {
   async createEpoch(data: CreateValuationRequest): Promise<ApiResponse> {
@@ -21,5 +21,15 @@ export const valuationService = {
   async confirm(data: CreateValuationRequest | any): Promise<ApiResponse> {
     const res = await api.post<ApiResponse>(API.VALUATION_CONFIRM, data);
     return res.data;
+  },
+
+  async preview(data: ValuationRequest): Promise<ValuationResponse> {
+    const res = await api.post<ApiResponse<ValuationResponse>>(API.VALUATION_PREVIEW, data);
+    return res.data.data!;
+  },
+
+  async submitNav(data: ValuationRequest): Promise<ValuationResponse> {
+    const res = await api.post<ApiResponse<ValuationResponse>>(API.VALUATION_NAV, data);
+    return res.data.data!;
   },
 };
